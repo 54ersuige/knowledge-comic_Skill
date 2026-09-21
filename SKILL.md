@@ -63,8 +63,10 @@ python guide.py "张巡守睢阳"   # 中文主题
 ```
 [1] 用户说"做个知识漫画" → Mavis 问主题 + 要点（≥2 条）
 [2] Mavis 用 recommend_style() + recommend_template() 推荐（基于主题关键词）
-[3] Mavis 用 ask_user 让用户拍板风格 + 模板
-[4] step_plan(topic, bullets, style_id, template_id)
+    + 用 `planner.recommend_pages(len(bullets))` 推荐页数（≤3 bullets=8 / 4-6=10 / ≥7=12）
+[3] Mavis 用 ask_user 让用户拍板风格 + 模板 + 页数
+[4] step_plan(topic, bullets, style_id, template_id, num_pages=None)
+    num_pages 默认 None = 按 bullets 数量自动推荐（8/10/12）。用户可显式传 6-15 覆盖。
     → 拿到 (storyboard, job_id, work_dir)
     → Mavis 用 read tool 读 work_dir/storyboard.json → 展示给用户
 [5] Mavis 用 ask_user 让用户拍板分镜（接受 / 改某页 caption/visual/body / 重跑）
@@ -134,6 +136,7 @@ sb, job_id, work_dir = step_plan(
     bullets=["1993 年卡尼曼实验", "峰 = 最高点 终 = 结束感", "持续时间被忽略"],
     style_id="new_yorker",     # 可选,默认自动推荐
     template_id="e",           # 可选,默认自动推荐
+    num_pages=10,              # 可选,默认按 bullets 数量自动推荐 (≤3=8 / 4-6=10 / ≥7=12)
 )
 
 image_paths = step_gen_images(job_id)  # 全跑

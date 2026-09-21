@@ -38,7 +38,7 @@ SKILL_ROOT = Path(__file__).resolve().parent.parent  # scripts/run.py → parent
 sys.path.insert(0, str(SKILL_ROOT))
 
 from scripts.core.config import get_config  # noqa: E402
-from scripts.core.planner import plan_storyboard, Storyboard, StoryPage  # noqa: E402
+from scripts.core.planner import plan_storyboard, Storyboard, StoryPage, recommend_pages  # noqa: E402
 from scripts.core.image_gen import generate_pages  # noqa: E402
 from scripts.core import article as article_mod  # noqa: E402
 from scripts.core import publisher as pub_mod  # noqa: E402
@@ -56,10 +56,20 @@ def step_plan(
     bullets: list[str],
     style_id: str | None = None,
     template_id: str | None = None,
+    num_pages: int | None = None,
     use_llm: bool = True,
     data_dir: Path | None = None,
 ) -> tuple[Storyboard, str, Path]:
     """Step 1: 主题 + 要点 → storyboard JSON + job_id + work_dir
+
+    Args:
+        topic: 主题
+        bullets: 要点列表
+        style_id: 风格 ID（None=自动推荐）
+        template_id: 排版 ID（None=自动推荐）
+        num_pages: 显式页数（None=按 recommend_pages 自动：≤3 bullets=8 / 4-6=10 / ≥7=12）
+        use_llm: 是否调 LLM（False=mock）
+        data_dir: 数据目录
 
     Returns:
         (storyboard, job_id, work_dir)
@@ -79,8 +89,11 @@ def step_plan(
     if not template_id:
         template_id, _ = recommend_template(topic)
         print(f"[auto-template] 推荐 {template_id}")
+    if num_pages is None:
+        num_pages = recommend_pages(len(bullets))
+        print(f"[auto-pages] 推荐 {num_pages} 页 (基于 {len(bullets)} 个 bullet)")
 
-    sb = plan_storyboard(topic, bullets, style_id, use_llm=use_llm)
+    sb = plan_storyboard(topic, bullets, style_id, use_llm=use_llm, num_pages=num_pages)
 
     job_id = f"kc_{int(time.time())}"
     work_dir = work_root / job_id

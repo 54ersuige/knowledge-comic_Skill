@@ -82,6 +82,7 @@ sb, job_id, work_dir = step_plan(
     bullets=["燕军围城", "六千八百人", "粮尽食人", "骂贼至死"],
     style_id="chinese_lianhuanhua_classic",
     template_id="c",
+    # num_pages=12,  # 可选,默认按 bullets 数量自动推荐 (≤3=8 / 4-6=10 / ≥7=12)
 )
 
 # Step 2

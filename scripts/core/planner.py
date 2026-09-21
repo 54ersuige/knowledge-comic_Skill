@@ -44,6 +44,28 @@ logger = logging.getLogger(__name__)
 DEFAULT_PAGES = 8
 
 
+def recommend_pages(num_bullets: int) -> int:
+    """v0.2.4 主题分级推荐页数。
+
+    逻辑（按主题深度自动选页数）：
+    - ≤3 bullets (短科普/单概念): 8 页
+    - 4-6 bullets (中等典故/中等事件): 10 页
+    - ≥7 bullets (长典故/多线叙事): 12 页
+    - 0 bullets: 默认 8 页
+
+    用户可在 step_plan(num_pages=N) 显式覆盖。
+    """
+    if num_bullets <= 3:
+        return 8
+    if num_bullets <= 6:
+        return 10
+    return 12
+
+
+# 别名 (兼容旧名字)
+DEFAULT_PAGES_RECOMMENDED = 10
+
+
 @dataclass
 class StoryPage:
     page: int
@@ -296,7 +318,18 @@ def _build_planner_user_msg(topic: str, bullets: list[str], style_id: str, canon
     return user_msg
 
 
-def _call_llm_storyboard(topic: str, bullets: list[str], style_id: str, canon_injection: str = "") -> Storyboard:
+def _call_llm_storyboard(
+    topic: str,
+    bullets: list[str],
+    style_id: str,
+    canon_injection: str = "",
+    num_pages: int | None = None,
+) -> Storyboard:
+    """调 LLM 生成 storyboard。
+
+    num_pages: 显式页数（None = 自动按 bullets 推荐）。
+    实际拼到 system prompt 末尾的 page count 指令。
+    """
     cfg = get_config()
     if not cfg.llm_api_key or cfg.llm_api_key.startswith("sk-placeholder"):
         raise RuntimeError(
@@ -304,17 +337,25 @@ def _call_llm_storyboard(topic: str, bullets: list[str], style_id: str, canon_in
             "or call mock_storyboard() instead."
         )
 
+    target_pages = num_pages if num_pages is not None else recommend_pages(len(bullets))
+
     client = OpenAI(api_key=cfg.llm_api_key, base_url=cfg.llm_base_url)
     user_msg = _build_planner_user_msg(topic, bullets, style_id, canon_injection)
 
-    logger.info("Planner LLM call: model=%s, topic=%s, bullets=%d",
-                cfg.llm_model, topic[:30], len(bullets))
+    # 动态 system prompt：把"输出 6-10 页"换成"输出 {target_pages} 页"
+    sys_prompt = PLANNER_SYSTEM_PROMPT.replace(
+        "输出 6-10 页分镜脚本",
+        f"输出 {target_pages} 页分镜脚本",
+    )
+
+    logger.info("Planner LLM call: model=%s, topic=%s, bullets=%d, target_pages=%d",
+                cfg.llm_model, topic[:30], len(bullets), target_pages)
 
     try:
         resp = client.chat.completions.create(
             model=cfg.llm_model,
             messages=[
-                {"role": "system", "content": PLANNER_SYSTEM_PROMPT},
+                {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": user_msg},
             ],
             temperature=0.7,
@@ -402,8 +443,18 @@ def _call_llm_storyboard(topic: str, bullets: list[str], style_id: str, canon_in
     )
 
 
-def mock_storyboard(topic: str, bullets: list[str], style_id: str) -> Storyboard:
-    """无 LLM 时的占位 storyboard。角色按主题时代自适应。"""
+def mock_storyboard(
+    topic: str,
+    bullets: list[str],
+    style_id: str,
+    num_pages: int | None = None,
+) -> Storyboard:
+    """无 LLM 时的占位 storyboard。角色按主题时代自适应。
+
+    num_pages: 显式目标页数（None = 自动按 recommend_pages 推荐）。
+    注意：mock 模式下页数实际由 bullets 数 + 起页 + 结尾页决定，
+    num_pages 仅作 informational 输出（actual LLM 模式下才严格生效）。
+    """
     pages: list[StoryPage] = []
 
     # 角色锚点（按 style_id 选）
@@ -470,11 +521,22 @@ def plan_storyboard(
     style_id: str = "cn_xuanfeng",
     use_llm: bool = True,
     canon_injection: str = "",
+    num_pages: int | None = None,
 ) -> Storyboard:
+    """Step 1: 主题 + 要点 → storyboard JSON。
+
+    Args:
+        topic: 主题
+        bullets: 要点列表
+        style_id: 风格 ID
+        use_llm: 是否调 LLM（False = mock）
+        canon_injection: 一致性约束注入
+        num_pages: 显式指定页数（None = 按 recommend_pages 自动推荐）
+    """
     if use_llm:
         try:
             return _call_llm_storyboard(topic, bullets, style_id, canon_injection)
         except RuntimeError as e:
             logger.warning("LLM unavailable (%s), falling back to mock storyboard", e)
-            return mock_storyboard(topic, bullets, style_id)
-    return mock_storyboard(topic, bullets, style_id)
+            return mock_storyboard(topic, bullets, style_id, num_pages)
+    return mock_storyboard(topic, bullets, style_id, num_pages)
