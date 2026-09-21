@@ -587,6 +587,174 @@ def render_template_c(inp: ArticleInput) -> str:
     return "\n".join(out)
 
 
+def render_template_e(inp: ArticleInput) -> str:
+    """E v3 · 典雅知识风（优化版，深蓝灰配色）
+
+    基于 v1 版式（章节大字 + 中文数字 + h2 + 图 + 数据卡 + 对话 + 印章 + 金句）
+    文字优化：
+      - 删：导语、题记、后记长段（冗余）
+      - 分段：正文按句号切 2-3 段，不再一大段
+      - 重点标记：每章第一句 blockquote（深蓝灰左 border + 浅蓝灰背景）
+
+    配色：朱砂红 → 深蓝灰（#2c3e5a），适合 STEM/认知/心理学/科普。
+    """
+    sb = inp.storyboard
+    title = inp.title or sb.title
+    out = ['<section data-template="e-v3">']
+
+    subtitle = sb.subtitle or ""
+    postscript = sb.postscript or ""
+
+    # 外层：手机框 + 米色羊皮纸背景
+    out.append(
+        '<div style="background:#eee8da;padding:24px 0;">'
+        '<div style="max-width:420px;margin:0 auto;background:#fff;'
+        'box-shadow:0 4px 20px rgba(0,0,0,.15);border-radius:8px;'
+        'overflow:hidden;padding:0;">'
+    )
+
+    # === 开篇（删导语+题记,精简）===
+    # 1. 卷首题词
+    out.append(
+        '<p style="font-size:13px;color:#2c3e5a;letter-spacing:3px;'
+        'text-align:center;margin:32px 20px 20px 20px;font-weight:600;">'
+        '知 识 故 事 · 漫 画 解 读</p>'
+    )
+    # 2. 大标题 h1
+    out.append(
+        f'<h1 style="text-align:center;font-size:30px;color:#1a1a1a;'
+        f'margin:0 20px 12px 20px;font-weight:700;letter-spacing:5px;'
+        f'line-height:1.5;">{_esc(title)}</h1>'
+    )
+    # 3. 副标题
+    if subtitle:
+        out.append(
+            f'<p style="text-align:center;font-size:13px;color:#2c3e5a;'
+            f'margin:0 20px 24px 20px;letter-spacing:2px;font-weight:500;">'
+            f'{_esc(subtitle)}</p>'
+        )
+    # 4. 双线分隔
+    out.append(
+        '<div style="margin:0 20px 8px 20px;border-top:2px solid #2c3e5a;'
+        'border-bottom:1px solid #2c3e5a;height:3px;"></div>'
+    )
+
+    # === 正文（每章优化版）===
+    for i, page in enumerate(sb.pages):
+        body = page.body or page.narration or ""
+        section_num = _cn_section(page.page)
+        # 优先用 LLM 给的精彩 highlight(峰终/温水/1993 等)
+        if page.highlight and page.highlight.strip():
+            highlight = page.highlight.strip()
+        else:
+            highlight = _extract_highlight(page.caption, body, page.page)
+
+        # 章节大字（80px）+ 章号
+        if highlight and highlight != f"第{page.page:02d}章":
+            out.append(
+                f'<div style="text-align:center;margin:36px 20px 6px 20px;">'
+                f'<span style="display:inline-block;font-size:64px;'
+                f'color:#2c3e5a;font-weight:bold;letter-spacing:5px;'
+                f'font-family:STSong,SimSun,宋体,serif;line-height:1;">'
+                f'{_esc(highlight)}</span></div>'
+                f'<p style="text-align:center;font-size:12px;color:#2c3e5a;'
+                f'letter-spacing:8px;margin:0 20px 4px 20px;font-weight:600;">'
+                f'第 {section_num} 章</p>'
+            )
+        else:
+            out.append(
+                f'<p style="text-align:center;font-size:12px;color:#2c3e5a;'
+                f'letter-spacing:8px;margin:36px 20px 8px 20px;font-weight:600;">'
+                f'第 {section_num} 章</p>'
+            )
+
+        # h2 章节题
+        if page.caption:
+            out.append(
+                f'<h2 style="font-size:19px;color:#1a1a1a;'
+                f'border-bottom:2px solid #2c3e5a;padding-bottom:6px;'
+                f'margin:8px 20px 14px 20px;font-weight:700;'
+                f'font-family:STSong,SimSun,宋体,serif;line-height:1.4;">'
+                f'{_esc(page.caption)}</h2>'
+            )
+
+        # 图
+        if i < len(inp.page_image_urls):
+            url = inp.page_image_urls[i]
+            out.append(
+                f'<p style="text-align:center;margin:0 20px 12px 20px;">'
+                f'<img src="{_esc(url)}" '
+                f'style="max-width:100%;border-radius:4px;" '
+                f'data-page="{page.page}" /></p>'
+            )
+
+        # 正文分段 + 重点标记
+        if body:
+            sentences = _split_sentences(body)[:3]  # 每章限 3 句
+            if sentences:
+                # 第一句做 blockquote（重点标记）
+                first = sentences[0]
+                out.append(
+                    f'<div style="margin:0 20px 12px 20px;padding:10px 14px;'
+                    f'background:rgba(44,62,90,0.06);border-left:3px solid #2c3e5a;">'
+                    f'<p style="font-size:13px;line-height:1.8;color:#1a1a1a;'
+                    f'margin:0;font-weight:500;">{_esc(first)}</p></div>'
+                )
+                # 后续句做正文（分段）
+                for s in sentences[1:]:
+                    out.append(
+                        f'<p style="font-size:13px;line-height:1.9;color:#2a2a2a;'
+                        f'margin:0 20px 8px 20px;text-align:justify;text-indent:2em;">'
+                        f'{_esc(s)}</p>'
+                    )
+
+        # dialogue
+        if page.dialogue:
+            out.append(
+                f'<p style="font-size:14px;line-height:1.8;color:#2c3e5a;'
+                f'margin:0 20px 18px 20px;padding:8px 12px;'
+                f'background:rgba(44,62,90,0.05);border-left:3px solid #2c3e5a;'
+                f'text-indent:0;font-family:STKaiti,KaiTi,楷体,serif;">'
+                f'「{_esc(page.dialogue)}」</p>'
+            )
+
+    # === 结尾（精简：删后记长段,只保留金句）===
+    out.append(
+        '<div style="margin:48px 20px 16px 20px;border-top:1px solid #2c3e5a;'
+        'border-bottom:2px solid #2c3e5a;padding:20px 0;text-align:center;">'
+        '<div style="display:inline-block;width:60px;height:60px;background:#2c3e5a;'
+        'color:white;font-family:STKaiti,KaiTi,楷体,serif;font-size:26px;'
+        'font-weight:bold;line-height:60px;text-align:center;'
+        'box-shadow:0 0 10px rgba(44,62,90,0.5);letter-spacing:3px;">完</div>'
+        '</div>'
+    )
+
+    # 一句话金句
+    if postscript:
+        first_sentence = postscript.split('。')[0] if '。' in postscript else postscript[:25]
+        out.append(
+            f'<p style="text-align:center;font-size:15px;color:#2c3e5a;'
+            f'margin:0 20px 28px 20px;font-weight:500;letter-spacing:1px;'
+            f'font-family:STKaiti,KaiTi,楷体,serif;line-height:1.7;">'
+            f'「{_esc(first_sentence)}」</p>'
+        )
+
+    out.append('</div></div>')
+    out.append('</section>')
+    return "\n".join(out)
+
+
+def _split_sentences(body: str) -> list[str]:
+    """按 。！？ 拆句,过滤空白,返回非空句子列表。"""
+    import re as _re
+    parts = _re.split(r'(?<=[。！？])', body)
+    return [s.strip() for s in parts if s.strip()]
+
+
+
+
+
+
 def render_template_d(inp: ArticleInput) -> str:
     """D. 多巴胺手绘卡片（科普/教育/亲子）"""
     sb = inp.storyboard
@@ -1037,17 +1205,19 @@ def render_template_c_v3(inp: ArticleInput) -> str:
 
 
 # Dispatcher
+# v0.2（2026-09-20）：从 5 模板砍到 3 模板
+#   - 保留 a（撕纸手账）、c（中国古典故事专版）、e（典雅知识风）
+#   - 砍掉 b（复古报纸）、c_v3（现代极简）、d（多巴胺手绘）
+# 3 个模板覆盖 95% 场景：e = 知识/商业；c = 古风/历史；a = 情感/通用兜底
 TEMPLATES = {
     "a": ("A · 撕纸手账风", render_template_a),
-    "b": ("B · 复古报纸风", render_template_b),
     "c": ("C · 中国古典故事专版", render_template_c),
-    "c_v3": ("C v3 · 现代极简风（Apple/MUJI）", render_template_c_v3),
-    "d": ("D · 多巴胺手绘卡片", render_template_d),
+    "e": ("E · 典雅知识风（深蓝灰配色版）", render_template_e),
 }
 
 
-def render_article(inp: ArticleInput, template: str = "a") -> str:
-    fn = TEMPLATES.get(template, TEMPLATES["a"])[1]
+def render_article(inp: ArticleInput, template: str = "e") -> str:
+    fn = TEMPLATES.get(template, TEMPLATES["e"])[1]
     return fn(inp)
 
 
@@ -1064,7 +1234,7 @@ def render_preview_article(sb: Storyboard, image_paths: list[Path], template: st
     ), template=template)
 
 
-def render_publish_article(sb: Storyboard, wechat_image_urls: list[str], template: str = "a") -> str:
+def render_publish_article(sb: Storyboard, wechat_image_urls: list[str], template: str = "e") -> str:
     return render_article(ArticleInput(
         storyboard=sb, page_image_urls=wechat_image_urls,
     ), template=template)

@@ -1,0 +1,22 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Generated
+data/
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Scratch / tmp
+*.txt~
+_*.txt
+_*_out.txt
+*.bak
+*.log

@@ -12,11 +12,21 @@ StoryPage schema：
   narration: str                  旁白
   body: str                       长段落正文（中国故事/典故场景专用）
   key_visual: str                 视觉锚点
+  highlight: str                  章节大字 4-8 字（跨章唯一）
 
 图文分离铁律（沿用 baoyu-comic）：
   - caption/对话/旁白/body → 进 HTML 文章层
   - visual 只描述画面（不含文字）
   - 跑图 prompt 不允许生成对话气泡、字幕、招牌文字
+
+v0.2 重构（2026-09-20）：
+  - 加强画面信息密度约束（角色一致性 + 视觉概念具象化 + 零文字）
+  - 修 "clock showing 2017" 这类字面文字 bug
+  - mock storyboard 改用统一角色锚点
+
+v0.2.1（2026-09-21）：
+  - 角色按主题时代自适应：现代主题用"scientist"，古代主题用"Han-Chinese historical person"
+  - 让 LLM 在 visual 字段开头写完整角色描述
 """
 from __future__ import annotations
 
@@ -60,6 +70,9 @@ class Storyboard:
     epigraph: str = ""               # 题记（开篇引言/诗句）
     postscript: str = ""              # 后记（结尾额外说明）
 
+    # === 推荐模板（v0.2.4 fix：让 step_render_article(template_id=None) 自动用对模板）===
+    recommended_template: str = ""    # c / e / a（planner 写；render/publish step 读）
+
     def to_dict(self) -> dict:
         return {
             "topic": self.topic,
@@ -70,6 +83,7 @@ class Storyboard:
             "preface": self.preface,
             "epigraph": self.epigraph,
             "postscript": self.postscript,
+            "recommended_template": self.recommended_template,
             "pages": [asdict(p) for p in self.pages],
         }
 
@@ -100,6 +114,87 @@ PLANNER_SYSTEM_PROMPT = """你是知识漫画分镜师。
 3. **1 个原因/机制**（不只是"是什么"）
 4. **highlight（章节大字）**：4-8 字的视觉锚点（如"1347"、"跳蚤"、"1/3"），跨章唯一
 
+## 画面信息密度（2026-09-20 重构硬性要求）
+
+**漫画画面要承担 70%+ 的信息量，文字只是补情绪/潜台词**。
+
+每章 visual 必须包含**至少 3 个具象元素**：
+1. **1 个具体角色**（表情 + 动作 + 服饰或特征，**必须复用同款角色**）
+2. **1 个抽象概念具象化**（数据可视化符号 / 隐喻物 / 时间指示器 / 对比物）
+3. **1 个场景细节**（背景元素 / 道具 / 视觉提示，让读者能"看懂画面发生了什么"）
+
+### ⚠️ 角色一致性硬约束（防"换人"bug）
+
+**所有页面的角色描述必须完全一致**，角色必须**符合主题时代背景**：
+
+**现代/科学/经济/商业/心理学主题**推荐锚点描述：
+> "a small scientist figure with short black hair, round wire-frame glasses, light grey sweater, dark trousers, neutral expression, age 30"
+
+**历史典故/国学/古典/古风主题**推荐锚点描述：
+> "a Han-Chinese historical person in traditional hanfu robe (crossed collar, wide sleeves, sash belt, hair pinned in classical style with subtle ornaments) or a dignified scholar-official in long scholarly robe with traditional headwear, rendered with elegant elongated proportions typical of classical Chinese figure painting. Age approximately 20-30. Serene, contemplative expression."
+
+写法规则：
+- ✅ **根据主题时代选合适的角色**（现代 → 现代人；古代 → 古代人）
+- ✅ 每页 visual 字段开头重复完整角色描述
+- ✅ 角色动作/表情可以变化（拿着放大镜 / 沉思 / 指着图表），但外貌不变
+- ❌ 禁止不同页用不同角色
+- ❌ 禁止"现代科学家"出现在历史典故里 / "古代人物"出现在 AI/算法主题里
+
+### ⚠️ 视觉概念具象化（防"信息密度低"bug）
+
+抽象概念必须转成**具体可见的视觉元素**：
+- ❌ "showing the concept of attention" → 太空
+- ✅ "three glowing dots floating in air, connected by golden threads to the character" → 视觉可读
+- ❌ "depicting the passage of time" → 太空
+- ✅ "a clock face with no numerals, two hands pointing to a corner, sand falling through an hourglass" → 视觉可读
+
+### ⚠️ 画面叙事性铁律（防"大头贴"bug，v0.2.2 强化）
+
+**画面是叙事工具，不是人物写真**——漫画读者看图就要"看懂故事在发生什么"，如果只看到一张人物特写脸，就是失败的画面（"大头贴"）。
+
+每页 visual 必须满足"3 要素 + 1 故事动作 + 1 镜头语言"：
+1. **人物**——但角色面部占画面 < 1/3（除非该页是特写镜头且有明确戏剧需求）
+2. **场景**——具体环境（城楼 / 书房 / 战场 / 街道 / 灯下 / 营帐），含建筑/地砖/天空/树木等可识别元素
+3. **道具/多人/互动**——画面里至少 1 个故事相关道具（兵器 / 食物 / 灯 / 地图 / 旗帜 / 死伤士兵 / 文书 / 食物残骸）+ 0-2 个次要人物 / 围观群众 / 敌人剪影 / 部下
+4. **故事动作**——主角或次要人物正在做某件具体的事（杀 / 煮 / 写 / 倒酒 / 抬 / 抬尸体 / 抛草人 / 围困 / 燃烧），不是静态站立
+5. **镜头语言**——12 页里必须有镜头变化：
+   - ≥ 1 张**全景/establishing shot**（远景，展示场景全貌，如"战场俯视"）
+   - ≥ 2 张**中景/medium shot**（人物半身 + 周围环境）
+   - ≤ 1 张**特写/close-up**（仅用于最戏剧时刻 + 必须有故事动作在脸上，如血溅脸/怒目圆睁）
+   - 其余用**中景偏宽/three-quarter shot**（人物在画面 1/2，周围是环境）
+
+❌ 错误示例（"大头贴"——只能看到脸，看不到故事）：
+- "He is shown in profile, looking out through a shattered window." → 仅 1 个人脸 + 1 扇窗，没故事
+- "He stands in the center of a vast, empty, abstract space. From his chest, seven large, translucent, ethereal rings are expanding outward." → 角色占满画面，背景全黑，看不到场景
+
+✅ 正确示例（叙事画面）：
+- "Wide establishing shot: the besieged city wall of Suiyang stretches across the frame, with defenders in red hanfu clustered on top of the crenellations, hundreds of black-clad enemy soldiers flooding the valley below, smoke from burning siege towers rising in the background, one defender on a wooden platform lowers a straw dummy by rope over the wall while arrows streak through the night sky."
+
+**写法规则**：
+- ✅ visual 必须以 "Wide shot" / "Medium shot" / "Close-up shot" 开头，强制镜头语言
+- ✅ visual 必含具体动作动词（slaughtering / boiling / lowering / writing / bursting / collapsing），不是 "stands" / "looks" / "is shown"
+- ✅ 场景描述必须包含**至少 2 个可识别环境元素**（城楼 + 天空 + 战旗 / 桌子 + 竹简 + 砚台 + 烛台 / 街道 + 砖石 + 倒塌墙垣）
+- ❌ 禁止"X is shown in..."这种以人为特征的身份化开头的描述
+- ❌ 禁止"vast, empty, abstract space"这种无环境的抽象背景
+
+### ⚠️ 零文字铁律（防"画面出字"bug）
+
+visual 字段**严禁**包含以下元素（即使概念正确，模型会把字面文字画出来）：
+- ❌ 具体年份数字（"clock showing 2017" → 字面会画 "2017"）
+- ❌ 数学公式 / 字母 / 符号（"equations on the wall" → 字面会画假字符）
+- ❌ "labeled A and B"（被读成真写 A 和 B 字样）
+- ✅ 改写："a wall clock with two hands but no numerals, hour hand pointing left"
+- ✅ 改写："a bar chart with two color-distinguished bars (one warm red, one cool blue), no text"
+
+### 落地对比
+
+- ❌ "A cute character looking confused" → 太抽象
+- ✅ "A small scientist (short black hair, round glasses, light grey sweater) holding a magnifying glass over a flat-line chart with two warm-colored spikes, eyes wide, mouth slightly open, sweat drop on forehead, a wall clock with no numerals showing 3pm-equivalent position behind" → 信息密度高
+- ❌ "Two cute lab assistants holding beakers of water" → 描述到位但没传达"实验对比"
+- ✅ "Two scientists (identical appearance, short black hair, round glasses, light grey sweater) holding beakers visually distinguished by color and temperature - one looks pained and shivers (cool blue), the other looks relieved and warm (soft red), a small thermometer icon and a heart icon visually mark the difference" → 视觉可读
+
+绝对禁止："A cute illustration of X" / "A clear visualization" / "A friendly cartoon" 这种泛泛描述。
+
 ## 章节结构（每章按顺序）
 
 1. highlight（章节大字 4-8 字，跨章唯一）
@@ -117,6 +212,54 @@ PLANNER_SYSTEM_PROMPT = """你是知识漫画分镜师。
 6. 结尾 postscript ≤ 80 字 + 含反直觉/反常识
 7. **绝对禁止**写"按照X风格"、"在Y视角下"、"本研究"、"以下内容将"等元叙事或程式化引导语
 
+## v0.2.3 七要素铁律（2026-09-21 升级，漫画画面表达系统化重写）
+
+行业最佳实践：单纯把 v0.2.2 的"wide shot / medium shot / close-up"塞进 prompt，模型容易忽视。
+升级到**显式七要素结构**，每页 visual 必须按 7 个键值组织（不强制分隔符，但每个关键词都要出现）：
+
+1. **SUBJECT** — 画面里有谁（具体人物 + 次要角色 / 群众 / 敌人剪影）
+2. **ACTION** — 正在做什么，**用反应动词**（yanking、slashing、biting、burning、lowering、slumping），不用静态动词（stands, looks, is shown）
+3. **CAMERA** — 镜头四件套完整：**shot size**（extreme_wide / wide / medium / three_quarter / close_up / insert_extreme_close）+ **angle**（eye_level / low_angle / high_angle / dutch_tilt / birds_eye / worms_eye）+ **lens**（24mm / 35mm / 50mm / 85mm / 135mm）+ **DoF**（shallow_dof / deep_focus / rack_focus）
+4. **PLACEMENT** — 主体在画面的具体位置（"positioned on the left third" / "centered but offset toward upper-right" / "in the foreground right"）
+5. **DEPTH LAYERS** — 三层景深显式列出：
+   - **FOREGROUND** — 离镜头最近的元素（门框边缘 / 刀刃尖 / 纸屑 / 绳索末端 / 铠甲片 / 烛火 / 尘埃）
+   - **MIDGROUND** — 主体动作发生的层
+   - **BACKGROUND** — 两个以上远景元素（建筑剪影 / 远山 / 烟柱 / 旗帜 / 敌军队列 / 天空渐变）
+6. **LIGHTING** — 光源 + 方向 + 色温 + 软硬（"hard side-light from a single candle on the left, deep crimson wash from behind"），禁用泛词 "dramatic lighting"
+7. **MOOD/PALETTE** — 情绪 + 配色绑定（"tense anticipation in desaturated ink black + cinnabar red + bone white"）
+
+### 角色一致性五件套 bible（v0.2.3 升级）
+
+不要写单一长段落描述（模型只抓前 30% 关键词）。每页 visual 开头必须以**五个独立锚点**列出角色：
+
+> "Character bible (FIVE ANCHORS, identical in every frame):
+> (1) Face shape: oval face, sharp jawline, refined cheekbones.
+> (2) Eyes: large double-lid expressive eyes with sharp winged eyeliner, dark brown irises.
+> (3) Eyebrows: thin angled swordsman brows, slightly furrowed.
+> (4) Lip & mouth: well-defined cupid's bow lips, normally closed, decisive line of jaw.
+> (5) Hair: Han-Chinese historical figure, high topknot bound with cloth ribbon (no metal crown), long black hair flowing behind when in motion.
+> Modern manhua body proportions (1:2 head-to-body). Age 20-30. Cel-shaded manhua face."
+
+### 表情 anchor（v0.2.3 升级）
+
+**绝不能**用 "defiant" / "sad" / "scared" 这种形容词描述情绪，模型画不出来。
+必须从以下 8 个 expression anchors 中**每页选 1 个**直接写到 visual 字段里，
+**用可执行的具体面部元素**而非情绪词：
+
+- **neutral** — serene closed lips, relaxed brow, eyes looking forward, neutral composed face
+- **rage_scream** — mouth FORCIBLY WIDE OPEN stretching jaw, eyes glaring skyward with visible white, veins on neck bulging, brow deeply furrowed, brow drawn down hard over glaring eyes, head tilted back
+- **sobbing_silence** — head bowed low, eyes closed tight, single tear visible on cheek, knuckles white gripping object, mouth pressed in trembling thin line
+- **grim_resolve** — jaws clenched, eyes narrowed with cold focus, lips pressed in a thin bloodless line, slight nod forward
+- **awed_stillness** — eyes wide round staring, lips parted in shock, breath held, freezing mid-motion, body stillness while expression active
+- **sneering_scorn** — one corner of mouth lifted, eyes half-lidded looking down at subject, chin tilted up, dismissive head tilt
+- **tender_grief** — soft downcast eyes, faint trembling smile of farewell, hand reaching toward something / someone just out of frame, tears unshed
+- **fierce_command** — chin forward, eyes locked on viewer, brows drawn flat in cold authority, arm extended forward with object, mouth open giving order
+
+### 镜头分配铁律（12 页版）
+
+每篇必须有**至少 4 张 wide/extreme_wide**（建立场景感）+ **至少 3 张 medium/three-quarter**（推进叙事）+ **至少 1 张 close_up**（仅用于全篇最戏剧时刻）+ **至少 1 张 insert_extreme_close**（刀 / 血 / 道具符号特写）。
+绝不能连续 ≥ 3 页同一 shot size。给每章分配镜头时按"开-推-特-退"节奏排版。
+
 ## 输出格式（严格 JSON，不要任何解释文字）
 
 {
@@ -130,7 +273,7 @@ PLANNER_SYSTEM_PROMPT = """你是知识漫画分镜师。
     {
       "page": 1,
       "highlight": "1347",
-      "visual": "画面描述（英文 30-80 词）",
+      "visual": "画面描述（英文 80-150 词，必须按 v0.2.3 七要素结构组织：SUBJECT / ACTION / CAMERA 四件套 / PLACEMENT / DEPTH LAYERS / LIGHTING / MOOD；开头列角色五件套；选 1 个 expression anchor）",
       "caption": "场景说明（中文 10-20 字）",
       "dialogue": "对话或空字符串",
       "narration": "旁白或空字符串",
@@ -189,20 +332,41 @@ def _call_llm_storyboard(topic: str, bullets: list[str], style_id: str, canon_in
     # MiniMax M3 开启 thinking 模式：content 包含 <think>...</think> + JSON
     # 提取 ```json ... ``` 块 或 最后一对 {...}
     data = None
-    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.S)
+    # 1) markdown 块（用最外层大括号提取，避免非贪婪匹配到内部 }）
+    m = re.search(r"```(?:json)?\s*\n([\s\S]*?)\n\s*```", content)
     if m:
-        try:
-            data = json.loads(m.group(1))
-        except json.JSONDecodeError:
-            pass
+        block = m.group(1).strip()
+        brace_start = block.find("{")
+        if brace_start >= 0:
+            depth = 0
+            for i in range(brace_start, len(block)):
+                if block[i] == "{":
+                    depth += 1
+                elif block[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = block[brace_start:i + 1]
+                        try:
+                            data = json.loads(candidate)
+                            break
+                        except json.JSONDecodeError:
+                            pass
     if data is None:
-        # 尝试找最后一个完整 {...}
-        m = re.search(r"\{[\s\S]*\}\s*$", content)
-        if m:
-            try:
-                data = json.loads(m.group(0))
-            except json.JSONDecodeError:
-                pass
+        # 2) 整段 content 中找最外层 {...}
+        brace_start = content.find("{")
+        if brace_start >= 0:
+            depth = 0
+            for i in range(brace_start, len(content)):
+                if content[i] == "{":
+                    depth += 1
+                elif content[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            data = json.loads(content[brace_start:i + 1])
+                            break
+                        except json.JSONDecodeError:
+                            pass
     if data is None:
         try:
             data = json.loads(content)
@@ -239,49 +403,56 @@ def _call_llm_storyboard(topic: str, bullets: list[str], style_id: str, canon_in
 
 
 def mock_storyboard(topic: str, bullets: list[str], style_id: str) -> Storyboard:
-    """无 LLM 时的占位 storyboard（沿用 baoyu-comic 经验 + 零文字铁律）。"""
+    """无 LLM 时的占位 storyboard。角色按主题时代自适应。"""
     pages: list[StoryPage] = []
 
-    # 第 1 页：开场（视觉锚点 = 卡通狐狸，画面无文字）
+    # 角色锚点（按 style_id 选）
+    if style_id == "cn_xuanfeng":
+        character = "A Han-Chinese historical person in traditional hanfu robe (crossed collar, wide sleeves, sash belt, hair pinned in classical style with subtle ornaments), serene contemplative expression, age 20-30, rendered with elegant elongated proportions typical of classical Chinese figure painting"
+    else:
+        character = "A small scientist figure with short black hair, round wire-frame glasses, light grey sweater, dark trousers, neutral expression, age 30"
+
+    # 第 1 页：开场
     pages.append(StoryPage(
         page=1,
         visual=(
-            "A friendly cartoon fox standing in front of a giant floating question mark, "
-            "gesturing welcomingly with both paws, hand-drawn style, clean ink lines, "
-            "cream paper background, NO text anywhere."
+            f"{character}, standing at the center, gesturing welcomingly with both hands, "
+            f"a giant floating question mark in soft outline behind, gentle paper texture, "
+            f"NO text anywhere on the image."
         ),
         caption="今天聊聊一个话题。",
-        dialogue="（狐狸在招手）",
+        dialogue="",
         narration="",
-        key_visual="friendly cartoon fox",
+        key_visual="consistent character anchor",
     ))
 
-    # 中间页：每条 bullet 一页（visual 只描述画面，不含文字）
+    # 中间页：每条 bullet 一页（visual 复用同款角色，只换动作/道具）
     for i, bullet in enumerate(bullets, start=2):
+        bullet_short = bullet[:30]
         pages.append(StoryPage(
             page=i,
             visual=(
-                f"A clear illustration of a single visual metaphor for: {bullet[:60]}. "
-                f"Friendly hand-drawn characters, clear composition, soft palette, "
-                f"ABSOLUTELY NO TEXT, NO labels, NO arrows-with-words."
+                f"{character}, holding a magnifying glass and pointing at a floating visual "
+                f"metaphor representing the concept of {bullet_short}, clear composition, "
+                f"soft warm palette, ABSOLUTELY NO TEXT, NO labels, NO arrows-with-words."
             ),
             caption=bullet[:25] + ("…" if len(bullet) > 25 else ""),
             dialogue="",
-            narration=bullet if len(bullet) < 50 else "",
-            key_visual="same cartoon fox narrator",
+            narration="",
+            key_visual="consistent character anchor",
         ))
 
     # 最后一页：结尾金句
     pages.append(StoryPage(
         page=len(pages) + 1,
         visual=(
-            "The cartoon fox giving a thumbs up, warm encouraging atmosphere, "
-            "subtle sparkles around, NO text on image."
+            f"{character}, giving a thumbs up with a calm knowing expression, "
+            f"a small glowing idea-bulb floating nearby, soft warm atmosphere, NO text on image."
         ),
         caption="所以，下次再遇到类似场景——",
-        dialogue="（狐狸竖起拇指）",
+        dialogue="",
         narration="懂这个话题的人，不过是把它当成一件平常事。",
-        key_visual="same cartoon fox narrator",
+        key_visual="consistent character anchor",
     ))
 
     return Storyboard(
@@ -296,7 +467,7 @@ def mock_storyboard(topic: str, bullets: list[str], style_id: str) -> Storyboard
 def plan_storyboard(
     topic: str,
     bullets: list[str],
-    style_id: str = "cn_contemporary",
+    style_id: str = "cn_xuanfeng",
     use_llm: bool = True,
     canon_injection: str = "",
 ) -> Storyboard:

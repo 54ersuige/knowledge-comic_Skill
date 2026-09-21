@@ -1,0 +1,15 @@
+# Knowledge Comic Skill - 锁版本依赖
+# 安装：python -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# Image generation (Agnes API)
+openai==1.54.3
+
+# HTTP / WeChat MP API
+requests==2.32.3
+
+# Image utilities
+Pillow==10.4.0
+
+# Config
+python-dotenv==1.0.1
+pydantic==2.9.2
