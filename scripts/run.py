@@ -404,6 +404,68 @@ def step_review_storyboard(
     return md, html_path
 
 
+def step_layout_preview(
+    job_id: str,
+    template_id: str | None = None,
+    compare_templates: list[str] | None = None,
+    data_dir: Path | None = None,
+) -> Path | list[Path]:
+    """Step 1.5（Checkpoint 1）：★ 生图前的排版预览 ★
+
+    这是「生图前定方向和内容」这一关真正该给用户看的东西：
+    **文字排版效果** —— 标题怎么排、章节题多大、正文什么字体、
+    朱砂红关键词高亮打在哪些词上、印章和收束段落在哪。
+
+    跑图很贵（10-12 页通常十几分钟 + 额度），所以在花钱之前先用**占位图**
+    把版面渲染出来，用户确认排版满意再决定跑不跑图。
+
+    Args:
+        job_id: job id
+        template_id: 模板 ID（None=用推荐模板）
+        compare_templates: 同时渲染多个模板做对比（如 ["c","e"]），
+                          返回 Path 列表；否则返回单个 Path
+    Returns:
+        html_path（单模板）或 html_paths（多模板对比）
+
+    Mavis 在对话里：
+      1. 调本函数拿到 html 路径
+      2. 用 deliver-assets 送 html；或用 Browser 打开让用户看
+      3. 摘要要点（正文长度 / 高亮词数 / 章节结构）一并报给用户
+      4. ask_user 拍板：排版 OK → 生图 / 换模板 / 改文案
+    """
+    cfg = get_config()
+    work_root = data_dir or cfg.data_dir
+    work_dir = work_root / job_id
+    sb = _load_storyboard(work_dir / "storyboard.json")
+
+    if template_id is None:
+        template_id = sb.recommended_template or "e"
+
+    if compare_templates:
+        out: list[Path] = []
+        for tpl in compare_templates:
+            html = article_mod.render_layout_preview(sb, template=tpl)
+            p = work_dir / f"layout_preview_{tpl}.html"
+            p.write_text(html, encoding="utf-8")
+            out.append(p)
+            print(f"[preview] template={tpl}  html={p}  size={len(html)} chars")
+        return out
+
+    html = article_mod.render_layout_preview(sb, template=template_id)
+    html_path = work_dir / f"layout_preview_{template_id}.html"
+    html_path.write_text(html, encoding="utf-8")
+
+    # 摘要：让用户不打开文件也能判断版面节奏
+    n = len(sb.pages)
+    body_lens = [len((p.body or "").strip()) for p in sb.pages]
+    kw_total = sum(len(p.keywords or []) for p in sb.pages)
+    print(f"[preview] template={template_id}  html={html_path}  size={len(html)} chars")
+    print(f"[preview] {n} 页 · 正文平均 {sum(body_lens)//max(n,1)} 字 · "
+          f"关键词共 {kw_total} 个（朱砂红高亮）")
+    print(f"[preview] 这是生图前的排版预览，图位为占位符；确认后再跑 step_gen_images")
+    return html_path
+
+
 # ============ Mavis 对话流辅助 step（v0.2.4 补齐） ============
 
 

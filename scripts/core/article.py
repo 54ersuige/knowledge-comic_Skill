@@ -1286,6 +1286,48 @@ def file_to_data_uri(image_path: Path) -> str:
     return f"data:image/png;base64,{b64}"
 
 
+def placeholder_image_uri(label: str, w: int = 750, h: int = 420) -> str:
+    """占位图 data URI（纯 SVG，零依赖）。
+
+    v0.3.4：模板渲染时图位是 `<img src="...">`，必须给**真实图片 URL**。
+    旧实现 `_placeholder_img()` 返回的是 `<div>` 标签字符串，被塞进 src 属性
+    会导致浏览器破图 —— 而这恰好破坏了排版预览的意义（用户要看的就是版面）。
+    SVG data URI 既能正常显示，又不引入 PIL 依赖。
+    """
+    import base64
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" '
+        f'viewBox="0 0 {w} {h}">'
+        '<defs><pattern id="d" width="28" height="28" patternUnits="userSpaceOnUse" '
+        'patternTransform="rotate(45)">'
+        '<rect width="28" height="28" fill="#e8e3d8"/>'
+        '<line x1="0" y1="0" x2="0" y2="28" stroke="#d8d2c4" stroke-width="2"/>'
+        '</pattern></defs>'
+        f'<rect width="{w}" height="{h}" fill="url(#d)"/>'
+        f'<rect x="2" y="2" width="{w-4}" height="{h-4}" fill="none" '
+        'stroke="#a0988a" stroke-width="2"/>'
+        f'<text x="{w//2}" y="{h//2+12}" font-size="34" fill="#787167" '
+        'font-family="PingFang SC,Microsoft YaHei,sans-serif" text-anchor="middle">'
+        f'{label}</text></svg>'
+    )
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode()
+
+
+def render_layout_preview(sb: Storyboard, template: str = "e",
+                          placeholder_h: int = 420) -> str:
+    """生图前的**排版预览**：真实模板 + 占位图，用户先确认文字版面效果。
+
+    v0.3.4 新增。这是 Checkpoint 1 的正确产物 —— 用户要确认的是
+    「文字排版效果长什么样」，确认后才值得花钱跑图。
+
+    和 render_publish_article 的区别：图片用占位符，不传真实路径，
+    所以生图之前就能看版面。
+    """
+    urls = [placeholder_image_uri(f"图 {i+1} / 共 {len(sb.pages)} 页", h=placeholder_h)
+            for i in range(len(sb.pages))]
+    return render_publish_article(sb, urls, template=template)
+
+
 def render_preview_article(sb: Storyboard, image_paths: list[Path], template: str = "a") -> str:
     page_urls = [file_to_data_uri(p) for p in image_paths]
     return render_article(ArticleInput(

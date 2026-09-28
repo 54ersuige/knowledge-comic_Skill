@@ -45,21 +45,16 @@ python guide.py "张巡守睢阳"   # 中文主题
 
 **背景**：用户看完 v0.3.3 产出的 storyboard JSON 提了两个问题——「用户不一定能看懂 JSON」和「这一步是要在生图前确定方向和内容，对吗」。第二个答案是**对的**：`references/user-review.md` 的 Checkpoint 1 就是这个设计，跑图很贵、分镜错了后面全白费。但原来的审阅方式确实不可用——只能让用户看多层嵌套的 JSON 原文。
 
-1. **新增分镜审阅页（`scripts/core/review_page.py` + `step_review_storyboard()`）**
-   - **自动体检**（纯规则，不调 LLM）：8 项硬约束检查，自动算出"哪几页不合格"
-     | 检查项 | 级别 | 判据 |
-     |---|---|---|
-     | 正文 100-150 字 | ❌ >150 / ⚠️ <100 | 用户硬偏好：图为主文字为脚注 |
-     | keywords ≥3 | ❌ 空 / ⚠️ 不足 | 空则朱砂红高亮整条失效 |
-     | `[GENDER:xx]` | ❌ 缺（仅连环画） | 缺失会把男性主角画成女性脸 |
-     | caption 非空 | ❌ | 决定读者翻页动机 |
-     | visual ≥300 字 | ⚠️ | 七要素建议，信息密度不足的先兆 |
-     | 零文字声明 | ⚠️ | 画面出字是最常复发的 bug |
-     | 多人物构图 | ⚠️（仅连环画） | 要求 3+ 主人物 + 远景配角 |
-     | 章节大字唯一 | ⚠️ | highlight 是读者第一眼内容 |
-   - **Markdown 审阅卡**（返回值，可直接贴进对话）：体检看板 + **问题页全文展开** + 全页一览。设计原则是"先结论后细节" —— 全部达标的页只给一行，不刷屏。
-   - **HTML 审阅页**（落盘 `work_dir/storyboard_review.html`）：浏览器打开，逐页详情 + 统计看板 + 按「必修/建议」筛选 tab
-   - 落盘 `storyboard_review.md` 同目录
+1. **新增排版预览（`step_layout_preview()` + `article.render_layout_preview()`）—— Checkpoint 1 的正确产物**
+   - **这一关要确认的是「文字排版效果」**：标题怎么排、章节题多大、正文什么字体、朱砂红高亮打在哪些词上、对话引文和收束段落在哪。用户确认排版满意，才值得花钱跑图（10-12 页十几分钟 + 额度）。
+   - 用**真实模板 + 占位图**渲染完整版面 → 生图之前就能看
+   - 支持 `compare_templates=["c","e"]` 多模板对比
+   - 顺带修 `_placeholder_img()`：旧实现返回 `<div>` 标签字符串，被塞进 `<img src>` 会**破图**——而这恰好破坏了排版预览的意义。改用 SVG data URI（零依赖）
+
+2. **分镜体检报告（`step_review_storyboard()` + `core/review_page.py`）—— 辅助工具**
+   - 8 项硬约束自动体检，输出 Markdown 审阅卡 + HTML 报告页
+   - **定位**：它是「哪几页不合格」的补充检查，**不是** Checkpoint 1 的主角。主角是上面的排版预览。
+   - 检查项：正文 100-150 字 / keywords ≥3 / `[GENDER:xx]` / caption 非空 / visual ≥300 字 / 零文字声明 / 多人物构图 / 章节大字唯一
 
 2. **新增真实题材冒烟测试（`scripts/tests/test_live_smoke.py`）**
    - **动机**：v0.3.2 / v0.3.3 的两个真 bug（苏武牧羊分类失败、keywords 被解析层丢弃）**都是只有真跑才现形的**，纯 mock 回归看不见「LLM 是否真的按 schema 输出」「解析层是否接住了」。
@@ -166,9 +161,13 @@ python guide.py "张巡守睢阳"   # 中文主题
 [4] step_plan(topic, bullets, style_id, template_id, num_pages=None)
     num_pages 默认 None = 按 bullets 数量自动推荐（8/10/12）。用户可显式传 6-15 覆盖。
     → 拿到 (storyboard, job_id, work_dir)
-    → Mavis 用 read tool 读 work_dir/storyboard.json → 展示给用户
-[5] Mavis 用 ask_user 让用户拍板分镜（接受 / 改某页 caption/visual/body / 重跑）
-    (可选) review.set_page_field(job_id, page, field, value) 改字段
+[5] ★ step_layout_preview(job_id) → html_path ★【生图前的排版预览】
+    真实模板 + 占位图，渲染出完整版面：标题/章节题/正文/朱砂红高亮/对话引文/收束
+    → Mavis 用 deliver-assets 送 html（或 Browser 打开）+ 报摘要（正文平均字数/关键词数）
+    → Mavis 用 ask_user 让用户拍板排版（OK 去生图 / 换模板 / 改文案 / 重跑分镜）
+    (可选) step_layout_preview(job_id, compare_templates=["c","e"]) 多模板对比
+    (可选) step_review_storyboard(job_id) 出"哪几页不合格"的体检报告（辅助，非主角）
+    (可选) review.set_page_field(job_id, page, field, value) 改字段后重看预览
 [6] step_gen_images(job_id)
     → 拿到 [Path, ...] PNG 列表
     → Mavis 用 deliver-assets 展示给用户
