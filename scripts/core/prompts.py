@@ -619,6 +619,11 @@ _CINEMATIC_TERM_PATTERNS: list[tuple[_re.Pattern, str]] = [
 ]
 
 
+# v0.3.9: 匹配 v0.3.7 让 LLM 写的 `// 中文速记`。
+# 速记只用于**审阅展示**，绝不能进图像 prompt（见 build_image_prompt 里的说明）。
+_ZH_NOTE_RE = _re.compile(r"\s*//\s*[^\n]*?(?=(?:\b[A-Z][A-Za-z ]{2,}\s*[:：])|$)")
+
+
 def _strip_cinematic_terms(text: str) -> str:
     """v0.2.6: 从 scene_description 里剥掉/替换 cinematic 词。"""
     out = text
@@ -673,6 +678,13 @@ def build_image_prompt(
     )
     if is_traditional_cn:
         scene_description = _strip_cinematic_terms(scene_description)
+        # v0.3.9 关键修复：剥掉 v0.3.7 引入的 `// 中文速记`。
+        # 速记是**给人看**的（审阅 layout_preview 时显示），绝不能进图像 prompt ——
+        # 实测苏武牧羊：带速记跑图 10 张全部跑偏成彩绘风/庭院景，
+        # 完全不是宣纸工笔连环画，且雪原/地窖/草原全被画成中式庭院。
+        # 根因是中文速记混进英文 prompt 后，风格锁定被中文语义冲淡。
+        scene_description = _ZH_NOTE_RE.sub("", scene_description)
+        scene_description = _re.sub(r"\s{2,}", " ", scene_description).strip()
 
     # v0.2.10 修复: 中国画风格强化 STRICT STYLE 夹击 —— 头部 + 角色锚点后再次重复,
     # 防止 agnes 看到 subject 描述里的"armor / map table / looking up"等现代写实关键词跑偏。

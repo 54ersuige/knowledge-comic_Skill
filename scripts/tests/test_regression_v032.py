@@ -297,6 +297,27 @@ ck("prompt 要求 body 写成短句", "3-5 个短句" in _PS)
 ck("prompt 说明 dialogue 不得复制 body",
    "不能" in _PS and "dialogue" in _PS and "重复" in _PS)
 
+# v0.3.9: `// 中文速记` 绝不能进图像 prompt。
+# 实测苏武牧羊：带速记跑图 10 张全部跑偏成彩绘风/庭院景，
+# 雪原/地窖/草原全被画成中式庭院 —— 中文速记冲淡了风格锁定。
+from scripts.core.prompts import build_image_prompt  # noqa: E402
+
+_v_with_note = ("SUBJECT: Su Wu, a Han-Chinese envoy, wearing dark robe; // 苏武 汉使 出塞 雪原 "
+                "ACTION: Su Wu walking, leading a large flock of sheep; // 苏武 牧羊 羊群 远景 "
+                "BACKGROUND: vast grey sky, distant snow-capped mountains; // 雪 群山 地平线 "
+                "MOOD: solemn, desaturated blue-white palette; // 肃穆 低饱和 "
+                "LIGHTING: hard overhead sunlight")
+_p_clean = build_image_prompt("chinese_lianhuanhua_classic", _v_with_note, gender="auto")
+_i = _p_clean.find("Scene:")
+_j = _p_clean.find("Composition")
+_scene = _p_clean[_i:_j] if _j > _i else _p_clean
+ck("图像 prompt 已剥离中文速记", "苏武 汉使 出塞 雪原" not in _p_clean)
+ck("图像 prompt 保留英文描述", "flock of sheep" in _p_clean)
+ck("图像 prompt 保留七要素标签", all(
+    t.lower() in _p_clean.lower()
+    for t in ("SUBJECT", "ACTION", "BACKGROUND", "MOOD")))
+ck("剥离后仍有风格锁定", _p_clean.count("classical Chinese painted illustration") >= 1)
+
 print()
 print("=" * 46)
 print("FAILED:", FAIL if FAIL else "NONE — 全部通过")
