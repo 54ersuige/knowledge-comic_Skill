@@ -1313,19 +1313,93 @@ def placeholder_image_uri(label: str, w: int = 750, h: int = 420) -> str:
     return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode()
 
 
+def _storyboard_note(p) -> str:
+    """单页分镜说明块（HTML）—— 展示"这页要画什么"。"""
+    from .story_script import page_elements
+    import html as _h
+
+    els = page_elements(p)
+    if not els:
+        return ""
+
+    kws = (p.get("keywords") if isinstance(p, dict) else getattr(p, "keywords", None)) or []
+    rows = "".join(
+        f'<span class="kcf-tag"><b>{_h.escape(lab)}</b> {_h.escape(val)}</span>'
+        for lab, val in els
+    )
+    kw_html = ""
+    if kws:
+        kw_html = (
+            '<div style="margin-top:6px;font-size:11.5px;color:#8a857c;">'
+            '关键词：<span style="color:#9b2332;">'
+            + " · ".join(_h.escape(k) for k in kws)
+            + "</span></div>"
+        )
+    return (
+        '<div class="kcf-note">'
+        '<div class="kcf-note-h">本图分镜意图</div>'
+        f'<div class="kcf-note-b">{rows}</div>'
+        f'{kw_html}</div>'
+    )
+
+
+# 分镜说明块的样式（渲染后注入到 <head>，避免 inline 过长）
+_NOTE_CSS = (
+    '<style>'
+    '.kcf-note{margin:8px 0 20px 0;padding:9px 11px;background:#faf7f0;'
+    'border-left:3px solid #9b2332;border-radius:0 4px 4px 0;}'
+    '.kcf-note-h{font-size:11px;color:#9b2332;letter-spacing:2px;'
+    'font-weight:600;margin-bottom:5px;}'
+    '.kcf-note-b{line-height:1.9;}'
+    '.kcf-tag{display:inline-block;margin:0 6px 4px 0;padding:1px 7px;'
+    'background:#f0ebe0;border-radius:3px;font-size:11.5px;color:#6b6459;}'
+    '.kcf-tag b{color:#9b2332;}'
+    '</style>'
+)
+
+
 def render_layout_preview(sb: Storyboard, template: str = "e",
                           placeholder_h: int = 420) -> str:
-    """生图前的**排版预览**：真实模板 + 占位图，用户先确认文字版面效果。
+    """生图前的**排版 + 分镜预览**：真实模板 + 占位图 + 每页分镜说明。
 
-    v0.3.4 新增。这是 Checkpoint 1 的正确产物 —— 用户要确认的是
-    「文字排版效果长什么样」，确认后才值得花钱跑图。
+    v0.3.6：这是 Checkpoint 1 的唯一产物 —— 用户打开**一个文件**就能确认：
+      1. 文字排版效果（模板成品版式）
+      2. 每页画面要画什么（主体/动作/配角/背景/景别/情绪 + 关键词）
+    确认图文相符后才跑 step_gen_images 生图。
 
-    和 render_publish_article 的区别：图片用占位符，不传真实路径，
-    所以生图之前就能看版面。
+    实现要点：分镜说明**不能**走 page_image_urls 通道 —— 模板会 `_esc()`
+    把 URL 塞进 `<img src="...">`，整段 HTML 会被转义成可见文本。
+    正确做法是：先用占位图 data URI 渲染出成品版式，再按
+    `data-page="N"` 把每个 `<img>` 替换成「占位图 + 分镜说明」。
     """
-    urls = [placeholder_image_uri(f"图 {i+1} / 共 {len(sb.pages)} 页", h=placeholder_h)
-            for i in range(len(sb.pages))]
-    return render_publish_article(sb, urls, template=template)
+    urls = [placeholder_image_uri(f"待生成", h=placeholder_h)
+            for _ in sb.pages]
+    html = render_publish_article(sb, urls, template=template)
+
+    # 按 data-page 把占位图后面插入分镜说明
+    # 模板里图位形如:
+    #   <p style="text-align:center;..."><img src="..." ... data-page="3" /></p>
+    # 匹配整个 <p> 块，把说明插到 </p> 之后。用命名分组避免下标写错。
+    by_page = {p.page: p for p in sb.pages}
+
+    def _replace(m: "re.Match") -> str:
+        page_no = int(m.group("page"))
+        p = by_page.get(page_no)
+        if p is None:
+            return m.group(0)
+        note = _storyboard_note(p)
+        return m.group(0) + note if note else m.group(0)
+
+    html = re.sub(
+        r'(<p[^>]*>\s*<img[^>]*\bdata-page="(?P<page>\d+)"[^>]*/>\s*</p>)',
+        _replace, html)
+
+    # 注入样式
+    if "</head>" in html:
+        html = html.replace("</head>", _NOTE_CSS + "</head>", 1)
+    else:
+        html = _NOTE_CSS + html
+    return html
 
 
 def render_preview_article(sb: Storyboard, image_paths: list[Path], template: str = "a") -> str:

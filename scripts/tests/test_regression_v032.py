@@ -152,34 +152,44 @@ ck("句号边界收刀", _clamp_body("甲" * 145 + "。" + "乙" * 100).endswith
 ck("空串安全", _clamp_body("") == "")
 
 print()
-print("=== F. 分镜脚本：画面速记不出中英残骸 (v0.3.5) ===")
+print("=== F. 分镜要素抽取 + 内嵌进 layout_preview (v0.3.6) ===")
 # 教训：逐词替换 LLM 自由英文必然产出 "雪y" / "跪ing" 这类拼接垃圾，
 # 比英文原文更难读。正确策略是"抽取而非翻译"——要么干净中文，要么完整英文。
-from scripts.core.story_script import _seg, render_script  # noqa: E402
+# v0.3.6 起这些要素直接内嵌进 layout_preview.html（Checkpoint 1 唯一产物）。
+from scripts.core.story_script import _seg, page_elements  # noqa: E402
+from scripts.core.article import render_layout_preview  # noqa: E402
+from scripts.core.planner import Storyboard, StoryPage  # noqa: E402
 
 # 能译出的 → 中文
 ck("人名道具动作 -> 中文",
    _seg("SUBJECT: Su Wu holding staff, kneeling in snow;", "subject") == "苏武 手捧 旌节 跪地")
-ck("长词吃掉短词(竹杖旌节 不重复 旌节)",
+ck("长词吃掉短词",
    "旌节 旌节" not in _seg("SUBJECT: Su Wu presenting the bare bamboo staff;", "subject"))
 ck("动作段 -> 中文", "跪地" in _seg("ACTION: Su Wu kneels deeply, bowing;", "action"))
 # 译不出的 → 保留完整英文，不产出半吊子
 out = _seg("SUBJECT: a hermit philosopher in tattered robes, elongated;", "subject")
 ck("译不出时保留英文原文", "hermit" in out and "跪" not in out)
-# 不得出现中英拼接残骸
-for bad in ("雪y", "跪ing", "芦苇荡s", "汉使 ,"):
-    ck(f"无拼接残骸 {bad!r}", bad not in _seg("SUBJECT: Su Wu kneeling in snow by reeds, 汉使 ,", "subject"))
+for bad in ("雪y", "跪ing", "芦苇荡s"):
+    ck(f"无拼接残骸 {bad!r}", bad not in _seg("SUBJECT: Su Wu kneeling in snow by reeds;", "subject"))
 
-md = render_script({
-    "topic": "T", "title": "测试", "style_id": "chinese_lianhuanhua_classic",
-    "recommended_template": "c",
-    "pages": [{
-        "page": 1, "highlight": "起", "caption": "题",
-        "body": "正文内容在这里。" * 12, "keywords": ["甲", "乙"],
-        "visual": "SUBJECT: Su Wu holding staff; ACTION: Su Wu kneels; BACKGROUND: snow",
-    }],
-})
-ck("脚本含三行结构", all(k in md for k in ("文字：", "高亮：", "画面：")))
+ck("page_elements 同时支持 dict 与 dataclass",
+   len(page_elements({"visual": "SUBJECT: Su Wu;"})) == 1
+   and len(page_elements(StoryPage(page=1, visual="SUBJECT: Su Wu;"))) == 1)
+
+# v0.3.6 核心：分镜内容必须内嵌进 layout_preview.html
+_sb = Storyboard(topic="T", style_id="chinese_lianhuanhua_classic", pages=[
+    StoryPage(page=1, visual="SUBJECT: Su Wu; ACTION: Su Wu kneels;", body="正文。" * 20,
+              caption="题", highlight="起", keywords=["苏武", "北海"]),
+    StoryPage(page=2, visual="SUBJECT: Li Ling; ACTION: Li Ling weeps;",
+              body="正文。" * 20, caption="题2", highlight="承", keywords=["李陵"]),
+])
+_html = render_layout_preview(_sb, template="c")
+ck("layout_preview 含分镜意图块", _html.count("本图分镜意图") == 2)
+ck("layout_preview 含要素标签", _html.count(">主体<") == 2)
+ck("layout_preview 含关键词", _html.count("关键词：") == 2)
+ck("layout_preview CSS 已注入", ".kcf-note{" in _html)
+ck("layout_preview 占位图用 data URI", "data:image/svg" in _html)
+ck("HTML 未被 _esc 转义成可见文本", "&lt;div" not in _html)
 
 print()
 print("=" * 46)

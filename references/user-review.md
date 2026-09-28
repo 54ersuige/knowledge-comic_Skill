@@ -29,47 +29,61 @@ v0.2（2026-09-20）**完全去掉** `subprocess.run([sys.executable, review.py]
 
 ## 3 个核心 checkpoint（Mavis 对话流版）
 
-### Checkpoint 1：排版预览（Step 1.5）—— Mavis 必做 ★
+### Checkpoint 1：排版 + 分镜审阅（Step 1.5）—— Mavis 必做 ★
 
 **触发时机**：LLM 生成 storyboard.json 后、**跑图前**。
 
-**这一关要确认的是「文字排版效果」**：标题怎么排、章节题多大、正文什么字体、朱砂红高亮打在哪些词上、对话引文和收束段落在哪。用户确认排版满意，才值得花钱跑图（10-12 页通常十几分钟 + 额度）。
+**唯一产物：`layout_preview_<template>.html`**。用户打开**这一个文件**就能确认两件事：
+
+1. **文字排版效果** —— 标题 / 章节题 / 正文 / 朱砂红高亮 / 印章 / 收束段落的成品版式
+2. **每页画面要画什么** —— 占位图正下方直接列出 `主体 / 动作 / 配角 / 背景 / 景别 / 情绪` + 该页关键词
+
+> **为什么是一个文件**：之前把排版预览和分镜脚本拆成两个文件，等于让用户两边对照，反而增加负担。v0.3.6 起分镜内容直接内嵌进 layout_preview，**一个文件完成审阅**。
 
 **Mavis 操作**：
 1. 调 `step_plan(...)` 拿到 `(sb, job_id, work_dir)`
-2. 调 **`step_layout_preview(job_id)`** 拿到 `html_path` —— 用**真实模板 + 占位图**渲染出完整版面
-3. 用 `deliver-assets` 送 html；或在 Browser 里打开让用户直接看
-4. 摘要一并报给用户（正文平均字数 / 关键词总数 / 章节结构），不打开文件也能判断节奏
-5. `ask_user` 让用户拍板
+2. 调 **`step_layout_preview(job_id)`** 拿到 `html_path`
+3. 用 `deliver-assets` 送 html；或用 Browser 打开让用户直接看
+4. `ask_user` 让用户拍板
 
 **想同时对比多个模板**：
 ```python
 paths = step_layout_preview(job_id, compare_templates=["c", "e"])
 ```
 
-**关键区别**：`step_layout_preview` 图位是**占位符**，所以**生图之前**就能看版面；而 `step_render_article` 用的是真实图片，产出的是最终发布版。这两个不是一回事，别混用。
-
 **用户操作（ask_user 选项）**：
-- ✅ **排版 OK，去生图** — 跑 `step_gen_images(job_id)`
+- ✅ **图文相符，去生图** — 跑 `step_gen_images(job_id)`
 - 🎨 **换模板重看** — `step_layout_preview(job_id, template_id="e")`
-- 🔧 **改某页文案** — `review.set_page_field(job_id, page, field, value)` 改完重看预览
+- 🔧 **改某页文案/分镜** — `review.set_page_field(job_id, page, field, value)`，改完重看预览
 - 🔄 **重跑整组分镜** — 重跑 `step_plan`
 - ❌ **拒绝** — 删 work_dir
 
-**可选的辅助体检**：`step_review_storyboard(job_id)` 生成"哪几页不合格"的检查报告（正文超长 / keywords 为空 / 单人物构图等）。它是**补充**，不是本关的主角——本关的主角是排版预览。
+**用户发现某页图文对不上时** → 调 `step_story_script(job_id)` 拿对齐诊断，直接告诉用户"这页 caption 里的动作『系』画面没画"，省去人工比对 visual 原文。
+
+**关键区别**：
+
+| API | 用在哪 | 图位 | 作用 |
+|---|---|---|---|
+| `step_layout_preview` | 生图**前** | 占位符 + 分镜说明 | ★ 审阅主产物 |
+| `step_story_script` | 生图前，用户发现对不上时 | 无 | 图文对齐诊断 |
+| `step_render_article` | 生图**后** | 真实图片 | 最终发布版 |
 
 **代码示例**：
 ```python
 sb, job_id, work_dir = step_plan("苏武牧羊", bullets=[...])
 
-# ★ 生图前：给用户看排版
+# ★ 生图前：排版 + 分镜都在这一个文件里
 html = step_layout_preview(job_id)
 deliver_assets(html)
+# 用户审阅 → 拍板
 
-# 用户确认后
+# 若用户说"p09 图文不符"：
+print(step_story_script(job_id))   # → 指出缺哪个动作/人物
+
+# 确认后
 image_paths = step_gen_images(job_id)
 final_html = step_render_article(job_id)
-draft = step_publish_draft(job_id)
+draft = step_publish_draft(job_id)   # ← 这一步会真的写公众号草稿箱，需先问用户
 ```
 
 ---

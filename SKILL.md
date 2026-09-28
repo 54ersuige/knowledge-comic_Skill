@@ -45,15 +45,21 @@ python guide.py "张巡守睢阳"   # 中文主题
 
 **背景**：用户看完 v0.3.3 产出的 storyboard JSON 提了两个问题——「用户不一定能看懂 JSON」和「这一步是要在生图前确定方向和内容，对吗」。第二个答案是**对的**：`references/user-review.md` 的 Checkpoint 1 就是这个设计，跑图很贵、分镜错了后面全白费。但原来的审阅方式确实不可用——只能让用户看多层嵌套的 JSON 原文。
 
-1. **新增排版预览（`step_layout_preview()` + `article.render_layout_preview()`）—— Checkpoint 1 的正确产物**
-   - **这一关要确认的是「文字排版效果」**：标题怎么排、章节题多大、正文什么字体、朱砂红高亮打在哪些词上、对话引文和收束段落在哪。用户确认排版满意，才值得花钱跑图（10-12 页十几分钟 + 额度）。
-   - 用**真实模板 + 占位图**渲染完整版面 → 生图之前就能看
-   - 支持 `compare_templates=["c","e"]` 多模板对比
-   - 顺带修 `_placeholder_img()`：旧实现返回 `<div>` 标签字符串，被塞进 `<img src>` 会**破图**——而这恰好破坏了排版预览的意义。改用 SVG data URI（零依赖）
+1. **排版 + 分镜合并为一个审阅产物（`step_layout_preview` + `core/story_script.py`）—— Checkpoint 1 的唯一产物**
+   - 用户在生图前打开**一个文件** `layout_preview_<template>.html` 就能确认：
+     1. **文字排版效果** —— 标题/章节题/正文/朱砂红高亮/印章/收束段落的成品版式
+     2. **每页画面要画什么** —— 占位图正下方列出 `主体/动作/配角/背景/景别/情绪` + 关键词
+   - **为什么合并**：v0.3.4 只给排版（看不出画面画什么），v0.3.5 又另开一个分镜脚本文件 —— 等于让用户两边对照，反而增加负担。v0.3.6 合并为一个文件。
+   - 实现要点：分镜说明**不能**走 `page_image_urls` 通道 —— 模板会 `_esc()` 把 URL 塞进 `<img src>`，整段 HTML 会被转义成可见文本。正确做法是先渲染占位图版式，再按 `data-page="N"` 注入说明块。
+   - 画面速记走「抽取而非翻译」：逐词替换 LLM 自由英文必然产出「雪y / 跪ing」这类中英残骸，比原文更难读。规则是**要么干净中文，要么完整英文**，不产拼接垃圾。
 
-2. **分镜体检报告（`step_review_storyboard()` + `core/review_page.py`）—— 辅助工具**
+2. **图文对齐诊断（`step_story_script()`）—— 辅助工具**
+   - 用户在 preview 里发现某页图文对不上时调它，直接指出缺哪个动作/哪个人物，省去人工比对 800 字 visual 原文
+   - 复用 `check_alignment` 的 `caption_missing_actions` / `entities`、`body_missing_*`
+
+3. **分镜体检报告（`step_review_storyboard()` + `core/review_page.py`）—— 辅助工具**
    - 8 项硬约束自动体检，输出 Markdown 审阅卡 + HTML 报告页
-   - **定位**：它是「哪几页不合格」的补充检查，**不是** Checkpoint 1 的主角。主角是上面的排版预览。
+   - **定位**：补充检查，**不是** Checkpoint 1 的主角
    - 检查项：正文 100-150 字 / keywords ≥3 / `[GENDER:xx]` / caption 非空 / visual ≥300 字 / 零文字声明 / 多人物构图 / 章节大字唯一
 
 2. **新增真实题材冒烟测试（`scripts/tests/test_live_smoke.py`）**
@@ -161,12 +167,12 @@ python guide.py "张巡守睢阳"   # 中文主题
 [4] step_plan(topic, bullets, style_id, template_id, num_pages=None)
     num_pages 默认 None = 按 bullets 数量自动推荐（8/10/12）。用户可显式传 6-15 覆盖。
     → 拿到 (storyboard, job_id, work_dir)
-[5] ★ step_layout_preview(job_id) → html_path ★【生图前的排版预览】
-    真实模板 + 占位图，渲染出完整版面：标题/章节题/正文/朱砂红高亮/对话引文/收束
-    → Mavis 用 deliver-assets 送 html（或 Browser 打开）+ 报摘要（正文平均字数/关键词数）
-    → Mavis 用 ask_user 让用户拍板排版（OK 去生图 / 换模板 / 改文案 / 重跑分镜）
+[5] ★ step_layout_preview(job_id) → html_path ★【生图前审阅 · 唯一产物】
+    一个文件同时展示：成品排版 + 每页分镜意图(主体/动作/配角/背景/景别/情绪 + 关键词)
+    → Mavis 用 deliver-assets 送 html（或 Browser 打开）+ 报摘要
+    → Mavis 用 ask_user 让用户拍板（图文相符 → 生图 / 换模板 / 改文案 / 重跑分镜）
     (可选) step_layout_preview(job_id, compare_templates=["c","e"]) 多模板对比
-    (可选) step_review_storyboard(job_id) 出"哪几页不合格"的体检报告（辅助，非主角）
+    (可选) 用户发现某页图文不符 → step_story_script(job_id) 出对齐诊断
     (可选) review.set_page_field(job_id, page, field, value) 改字段后重看预览
 [6] step_gen_images(job_id)
     → 拿到 [Path, ...] PNG 列表

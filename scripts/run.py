@@ -43,7 +43,6 @@ from scripts.core.image_gen import generate_pages, generate_character_references
 from scripts.core import article as article_mod  # noqa: E402
 from scripts.core import publisher as pub_mod  # noqa: E402
 from scripts.core.review_page import check_quality, render_html, render_markdown  # noqa: E402
-from scripts.core.story_script import render_script  # noqa: E402
 from scripts.core.prompts import (  # noqa: E402
     recommend_style,
     recommend_template,
@@ -408,30 +407,17 @@ def step_review_storyboard(
 def step_story_script(
     job_id: str,
     data_dir: Path | None = None,
-    with_diagnosis: bool = True,
 ) -> str:
-    """Step 1.5（Checkpoint 1）：★ 生图前的分镜脚本 ★
+    """图文对齐诊断（v0.3.6 起为**辅助工具**，主产物是 layout_preview.html）。
 
-    解决用户的实际痛点：**生图很贵、且常要重跑很多次才能成功**。
-    所以在花钱之前必须先把「文字内容和画面意图的匹配」确认掉。
-
-    返回一段**对话内可直接阅读**的 Markdown 脚本，一屏读完，不用开文件。
-    每页三行：
-
-        **p03** 吞毡饮雪 — 幽囚北海，食草根毡毛，饮雪充饥
-        　　文字：环境成为最大的敌人。北海不是海，是冻土荒原。（125 字）
-        　　高亮：吞毡 · 饮雪 · 北海 · 幽囚 · 草根
-        　　画面：主体 Su Wu 男，消瘦；动作 跪雪地嚼毡毛饮水；背景 洞穴
-
-    画面侧是从七要素 visual 里自动抽取的要素（主体/动作/配角/背景），
-    不倒出 800 字英文原文 —— 用户要的是"这张图打算画什么"。
+    用户在 layout_preview.html 里审阅排版 + 分镜时，如果发现某页图文对不上，
+    调本函数定位到底是缺了哪个动作 / 哪个人物，避免人工比对 visual 原文。
 
     Args:
         job_id: job id
         data_dir: 数据目录
-        with_diagnosis: True=附带硬约束体检 + 图文对齐风险页
     Returns:
-        Markdown 脚本文本（直接贴进对话）
+        对齐风险报告（Markdown）。无风险时返回「全部通过」一句话。
     """
     cfg = get_config()
     work_root = data_dir or cfg.data_dir
@@ -441,32 +427,42 @@ def step_story_script(
         raise FileNotFoundError(f"storyboard.json not found: {sb_path}")
 
     raw = json.loads(sb_path.read_text(encoding="utf-8"))
-    health = check_quality(raw) if with_diagnosis else None
+    health = check_quality(raw)
 
-    alignment = None
-    if with_diagnosis:
-        try:
-            from scripts.check_alignment import check_storyboard
-            alignment = check_storyboard(sb_path)
-        except Exception as e:  # 对齐检查是增强项，不该阻断主流程
-            print(f"[script] alignment check skipped: {e}")
+    from scripts.check_alignment import check_storyboard
+    rep = check_storyboard(sb_path)
+    pages = raw.get("pages", [])
 
-    md = render_script(raw, health=health, alignment=alignment)
+    risky = [r for r in rep["results"] if r.get("severity") in ("high", "medium")]
+    if not risky and not health["stats"]["errors"]:
+        out = "✅ 全部页面图文相符，硬约束也全部通过。可以生图。"
+    else:
+        lines = []
+        if health["stats"]["errors"]:
+            bad = sorted({i.page for i in health["issues"] if i.level == "error"})
+            lines.append(f"⚠️ 硬约束必修项涉及页 {bad}\n")
+        for r in risky:
+            no = r["page"]
+            page = next((x for x in pages if x.get("page") == no), {})
+            tag = "🔴" if r["severity"] == "high" else "🟡"
+            lines.append(f"{tag} **p{no:02d}** {page.get('highlight', '')}")
+            for label, key in (("caption 里的动作画面没画", "caption_missing_actions"),
+                               ("caption 里的人物画面没画", "caption_missing_entities")):
+                v = r.get(key) or []
+                if v:
+                    lines.append(f"　　{label}：**{'、'.join(v)}**")
+            for label, key in (("正文提到但画面没画的动作", "body_missing_actions"),
+                               ("正文提到但画面没画的人物", "body_missing_entities")):
+                v = r.get(key) or []
+                if len(v) >= 2:
+                    lines.append(f"　　{label}：**{'、'.join(v)}**")
+            lines.append("")
+        out = "\n".join(lines).rstrip()
 
-    # 同时落盘，方便用户想细看时开
-    out_path = work_dir / "storyboard_script.md"
-    out_path.write_text(md, encoding="utf-8")
-
-    n = len(raw.get("pages", []))
-    print(f"[script] job={job_id}  pages={n}  -> {out_path}")
-    if health:
-        s = health["stats"]
-        print(f"[script] 硬约束: error={s['errors']} warn={s['warns']} "
-              f"body_ok={s['body_ok']}/{n} kw_ok={s['kw_ok']}/{n}")
-    if alignment:
-        print(f"[script] 图文对齐: HIGH={alignment['high_risk_pages']} "
-              f"MEDIUM={alignment['medium_risk_pages']}")
-    return md
+    (work_dir / "alignment_report.md").write_text(out + "\n", encoding="utf-8")
+    print(f"[align] job={job_id}  HIGH={rep['high_risk_pages']} "
+          f"MEDIUM={rep['medium_risk_pages']}  errors={health['stats']['errors']}")
+    return out
 
 
 def step_layout_preview(
@@ -474,29 +470,33 @@ def step_layout_preview(
     template_id: str | None = None,
     compare_templates: list[str] | None = None,
     data_dir: Path | None = None,
+    placeholder_h: int = 420,
 ) -> Path | list[Path]:
-    """Step 1.5（Checkpoint 1）：★ 生图前的排版预览 ★
+    """Step 1.5（Checkpoint 1）：★ 生图前的排版 + 分镜审阅 ★
 
-    这是「生图前定方向和内容」这一关真正该给用户看的东西：
-    **文字排版效果** —— 标题怎么排、章节题多大、正文什么字体、
-    朱砂红关键词高亮打在哪些词上、印章和收束段落在哪。
+    **这是 Checkpoint 1 的唯一产物**：用户打开这一个 HTML 就能确认两件事：
+      1. **文字排版效果** —— 标题/章节题/正文/朱砂红高亮/印章/收束段落的成品版式
+      2. **每页分镜要画什么** —— 占位图下方直接列出主体/动作/配角/背景/景别/情绪
 
-    跑图很贵（10-12 页通常十几分钟 + 额度），所以在花钱之前先用**占位图**
-    把版面渲染出来，用户确认排版满意再决定跑不跑图。
+    确认「文字说的」和「画面画的」对得上，再跑 `step_gen_images` 生图。
+    跑图很贵且常要重跑，所以这一关必须先过。
+
+    不想开文件时，可调 `step_story_script(job_id)` 拿对话内的图文对齐诊断。
 
     Args:
         job_id: job id
         template_id: 模板 ID（None=用推荐模板）
         compare_templates: 同时渲染多个模板做对比（如 ["c","e"]），
                           返回 Path 列表；否则返回单个 Path
+        placeholder_h: 占位图高度（px）
     Returns:
         html_path（单模板）或 html_paths（多模板对比）
 
     Mavis 在对话里：
       1. 调本函数拿到 html 路径
       2. 用 deliver-assets 送 html；或用 Browser 打开让用户看
-      3. 摘要要点（正文长度 / 高亮词数 / 章节结构）一并报给用户
-      4. ask_user 拍板：排版 OK → 生图 / 换模板 / 改文案
+      3. ask_user 拍板：图文相符 → 生图 / 换模板 / 改文案
+      4. 用户发现某页图文不符 → 调 step_story_script 定位缺什么
     """
     cfg = get_config()
     work_root = data_dir or cfg.data_dir
@@ -509,25 +509,27 @@ def step_layout_preview(
     if compare_templates:
         out: list[Path] = []
         for tpl in compare_templates:
-            html = article_mod.render_layout_preview(sb, template=tpl)
+            html = article_mod.render_layout_preview(
+                sb, template=tpl, placeholder_h=placeholder_h)
             p = work_dir / f"layout_preview_{tpl}.html"
             p.write_text(html, encoding="utf-8")
             out.append(p)
             print(f"[preview] template={tpl}  html={p}  size={len(html)} chars")
         return out
 
-    html = article_mod.render_layout_preview(sb, template=template_id)
+    html = article_mod.render_layout_preview(
+        sb, template=template_id, placeholder_h=placeholder_h)
     html_path = work_dir / f"layout_preview_{template_id}.html"
     html_path.write_text(html, encoding="utf-8")
 
-    # 摘要：让用户不打开文件也能判断版面节奏
     n = len(sb.pages)
     body_lens = [len((p.body or "").strip()) for p in sb.pages]
     kw_total = sum(len(p.keywords or []) for p in sb.pages)
     print(f"[preview] template={template_id}  html={html_path}  size={len(html)} chars")
+    print(f"[preview] 含排版成品 + 每页分镜要素（主体/动作/配角/背景/景别/情绪）")
     print(f"[preview] {n} 页 · 正文平均 {sum(body_lens)//max(n,1)} 字 · "
           f"关键词共 {kw_total} 个（朱砂红高亮）")
-    print(f"[preview] 这是生图前的排版预览，图位为占位符；确认后再跑 step_gen_images")
+    print(f"[preview] 确认图文相符后再跑 step_gen_images 生图")
     return html_path
 
 
