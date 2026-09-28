@@ -1,10 +1,10 @@
 ---
 name: knowledge-comic
 description: Knowledge comic generator that turns a topic + bullet list into a publication-ready WeChat MP draft. Use when user asks for "知识漫画", "公众号知识漫画", "科普漫画", "典故解读", "历史故事漫画", "一图读懂", "科普文章配图". Hands off the entire pipeline — style recommendation, storyboard split, image generation, article HTML render, and WeChat draft creation — through step-by-step Python APIs that Mavis calls directly inside the conversation.
-version: 0.3.2
+version: 0.3.3
 ---
 
-# Knowledge Comic (WeChat MP) — v0.3.2
+# Knowledge Comic (WeChat MP) — v0.3.3
 
 把「主题 + 要点」变成可一键发布到公众号草稿箱的知识漫画图文。**端到端在 Mavis 对话里逐步执行 + 用户拍板**。
 
@@ -40,6 +40,33 @@ python guide.py "张巡守睢阳"   # 中文主题
 ```
 
 返回 JSON：`{"style_id": "chinese_lianhuanhua_classic", "template_id": "c", "alternates": [...], "rationale": "..."}`
+
+## v0.3.3 核心变化（2026-09-28，苏武牧羊真实端到端测试暴露的 2 个 bug）
+
+**背景**：v0.3.2 修复后，用「苏武牧羊」跑真实端到端测试（调真 LLM），又暴露 2 个问题。都是**只靠静态审查发现不了、必须真跑才现形**的。
+
+1. **分类器对「名单外人名」失效** — 根因：v0.3.2 的分类器依赖 120+ 人物名表，而名单永远补不完。苏武不在表里、没有朝代词、"牧羊"不匹配古典双人物句式 → 三类信号全落空 → 被误判成 `new_yorker`。
+   - 修复：新增 `_looks_like_cn_history()` —— **不依赖人名表**的通用中国历史题材识别，三条命中任一即可：
+     1. 史事动作词（牧羊 / 被贬 / 流放 / 卧薪 / 戍边 / 殉国 / 纳谏 …）
+     2. 史事语境词（漠北 / 塞外 / 朝廷 / 匈奴 / 朝堂 …）
+     3. 古典双人物叙事句式
+     排除含拉丁字母/数字 及 `_MODERN_BLOCKLIST` 命中的现代题眼
+   - 同时修 `recommend_template` 逻辑漏洞：原"分类器落空 → 回退类型词匹配"会**覆盖**风格派生结果，导致兜底层命中时出现"风格对、模板错"的分裂输出
+   - 回归测试补 6 组**名单外用例**（苏武牧羊 / 范仲淹被贬 / 卧薪尝胆 / 负荆请罪 …）防止回退
+
+2. **keywords 在 LLM 解析层被静默丢弃** —— 根因：`planner.py` 构造 `StoryPage` 时漏了 `keywords` 字段。v0.2.9 加 keywords 时只改了 prompt schema 和 dataclass 定义，**忘了同步解析层** —— LLM 按 schema 正常输出了，却在解析时被丢掉。朱砂红高亮整条链路失效。
+   - 这是典型的"改了一处没改另一处"漏改：prompt 侧看起来一切正常，只有端到端实跑才暴露。
+   - 实测对比（苏武牧羊 10 页）：
+
+     | 指标 | 修复前 | 修复后 |
+     |---|---|---|
+     | 有 keywords 的页 | 0/10 | **10/10** |
+     | body 在 100-150 字 | 2/10 | **9/10** |
+     | body 平均字数 | 93 | **114** |
+
+   - 修复：`keywords=p.get("keywords", []) or []` 补进解析层
+
+**验证**：苏武牧羊 10 页实跑 → 风格 `chinese_lianhuanhua_classic` + 模板 `c` 正确，GENDER 标记 10/10，keywords 10/10；3 个测试全绿（26 组分类用例）
 
 ## v0.3.2 核心变化（2026-09-28，代码审核修复 7 个 bug）
 
@@ -276,7 +303,7 @@ python scripts/run.py publish --job-id kc_xxx
 
 ```
 knowledge-comic/
-├── SKILL.md                  ← 你正在读的（v0.3.2）
+├── SKILL.md                  ← 你正在读的（v0.3.3）
 ├── references/
 │   ├── handraw_styles.md     ← 5 个锁定风格完整定义 + 推荐矩阵
 │   ├── templates.md          ← 3 个排版模板详情 + 配色对照
@@ -415,7 +442,8 @@ knowledge-comic/
 
 ## 变更记录
 
-- **0.3.2**（2026-09-28）：全量代码审核修复 7 个 bug — P0 风格推荐对真实题材失效（改加权信号分类器）/ LLM 无 timeout 挂死 / num_pages 两处被丢弃 / mock 历史风格画出现代科学家 / 跑图失败写 0 字节污染下游 / step_rewrite_visual 返回错页；另清理角色锁硬编码 + config 硬编码路径 + 死代码。回归测试 22/22
+- **0.3.3**（2026-09-28）：苏武牧羊真实端到端测试暴露 2 个 bug — 分类器增加史事动作词兜底层（覆盖名单外人名）/ 修复 keywords 在 LLM 解析层被静默丢弃（朱砂红高亮曾整条失效）
+- **0.3.2**（2026-09-28）：全量代码审核修复 7 个 bug — P0 风格推荐对真实题材失效（改加权信号分类器）/ LLM 无 timeout 挂死 / num_pages 两处被丢弃 / mock 历史风格画出现代科学家 / 跑图失败写 0 字节污染下游 / step_rewrite_visual 返回错页；另整理 tests/ + 归档 70 个一次性脚本 + 同步 src/core
 - **0.3.1**（2026-09-24）：`step_publish_draft` 加 `thumb_page` 参数（封面选页，不再固定用第 1 张）
 - **0.3.0**（2026-09-24）：性别分支 + 角色视觉签名锁定 + 画面 caption 匹配 + 零文字强化
 - **0.2.9**（2026-09-23）：正文精简 100-150 字 + 关键词高亮 + 连环画多人物铁律 + 现代审美脸默认
