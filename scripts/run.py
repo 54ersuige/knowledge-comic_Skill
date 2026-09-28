@@ -43,6 +43,7 @@ from scripts.core.image_gen import generate_pages, generate_character_references
 from scripts.core import article as article_mod  # noqa: E402
 from scripts.core import publisher as pub_mod  # noqa: E402
 from scripts.core.review_page import check_quality, render_html, render_markdown  # noqa: E402
+from scripts.core.story_script import render_script  # noqa: E402
 from scripts.core.prompts import (  # noqa: E402
     recommend_style,
     recommend_template,
@@ -402,6 +403,70 @@ def step_review_storyboard(
         bad = sorted({i.page for i in health["issues"] if i.level == "error"})
         print(f"[review] 必修页: {bad} —— 生图前应先修")
     return md, html_path
+
+
+def step_story_script(
+    job_id: str,
+    data_dir: Path | None = None,
+    with_diagnosis: bool = True,
+) -> str:
+    """Step 1.5（Checkpoint 1）：★ 生图前的分镜脚本 ★
+
+    解决用户的实际痛点：**生图很贵、且常要重跑很多次才能成功**。
+    所以在花钱之前必须先把「文字内容和画面意图的匹配」确认掉。
+
+    返回一段**对话内可直接阅读**的 Markdown 脚本，一屏读完，不用开文件。
+    每页三行：
+
+        **p03** 吞毡饮雪 — 幽囚北海，食草根毡毛，饮雪充饥
+        　　文字：环境成为最大的敌人。北海不是海，是冻土荒原。（125 字）
+        　　高亮：吞毡 · 饮雪 · 北海 · 幽囚 · 草根
+        　　画面：主体 Su Wu 男，消瘦；动作 跪雪地嚼毡毛饮水；背景 洞穴
+
+    画面侧是从七要素 visual 里自动抽取的要素（主体/动作/配角/背景），
+    不倒出 800 字英文原文 —— 用户要的是"这张图打算画什么"。
+
+    Args:
+        job_id: job id
+        data_dir: 数据目录
+        with_diagnosis: True=附带硬约束体检 + 图文对齐风险页
+    Returns:
+        Markdown 脚本文本（直接贴进对话）
+    """
+    cfg = get_config()
+    work_root = data_dir or cfg.data_dir
+    work_dir = work_root / job_id
+    sb_path = work_dir / "storyboard.json"
+    if not sb_path.exists():
+        raise FileNotFoundError(f"storyboard.json not found: {sb_path}")
+
+    raw = json.loads(sb_path.read_text(encoding="utf-8"))
+    health = check_quality(raw) if with_diagnosis else None
+
+    alignment = None
+    if with_diagnosis:
+        try:
+            from scripts.check_alignment import check_storyboard
+            alignment = check_storyboard(sb_path)
+        except Exception as e:  # 对齐检查是增强项，不该阻断主流程
+            print(f"[script] alignment check skipped: {e}")
+
+    md = render_script(raw, health=health, alignment=alignment)
+
+    # 同时落盘，方便用户想细看时开
+    out_path = work_dir / "storyboard_script.md"
+    out_path.write_text(md, encoding="utf-8")
+
+    n = len(raw.get("pages", []))
+    print(f"[script] job={job_id}  pages={n}  -> {out_path}")
+    if health:
+        s = health["stats"]
+        print(f"[script] 硬约束: error={s['errors']} warn={s['warns']} "
+              f"body_ok={s['body_ok']}/{n} kw_ok={s['kw_ok']}/{n}")
+    if alignment:
+        print(f"[script] 图文对齐: HIGH={alignment['high_risk_pages']} "
+              f"MEDIUM={alignment['medium_risk_pages']}")
+    return md
 
 
 def step_layout_preview(

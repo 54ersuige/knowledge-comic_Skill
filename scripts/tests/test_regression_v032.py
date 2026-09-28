@@ -1,6 +1,10 @@
+# -*- coding: utf-8 -*-
 """v0.3.2 修复回归测试（不烧 API 额度，全部走 mock / 本地）。
 
 跑法(任意目录): python scripts/tests/test_regression_v032.py
+
+注: 必须显式声明 utf-8 —— 本文件含中文源码字面量，Windows 上 Python
+默认按 GBK 解析源码会抛 SyntaxError。
 """
 import json
 import shutil
@@ -146,6 +150,36 @@ ck("151 字截到 150", len(_clamp_body("字" * 151)) == 150)
 ck("300 字截到 150", len(_clamp_body("字" * 300)) == 150)
 ck("句号边界收刀", _clamp_body("甲" * 145 + "。" + "乙" * 100).endswith("。"))
 ck("空串安全", _clamp_body("") == "")
+
+print()
+print("=== F. 分镜脚本：画面速记不出中英残骸 (v0.3.5) ===")
+# 教训：逐词替换 LLM 自由英文必然产出 "雪y" / "跪ing" 这类拼接垃圾，
+# 比英文原文更难读。正确策略是"抽取而非翻译"——要么干净中文，要么完整英文。
+from scripts.core.story_script import _seg, render_script  # noqa: E402
+
+# 能译出的 → 中文
+ck("人名道具动作 -> 中文",
+   _seg("SUBJECT: Su Wu holding staff, kneeling in snow;", "subject") == "苏武 手捧 旌节 跪地")
+ck("长词吃掉短词(竹杖旌节 不重复 旌节)",
+   "旌节 旌节" not in _seg("SUBJECT: Su Wu presenting the bare bamboo staff;", "subject"))
+ck("动作段 -> 中文", "跪地" in _seg("ACTION: Su Wu kneels deeply, bowing;", "action"))
+# 译不出的 → 保留完整英文，不产出半吊子
+out = _seg("SUBJECT: a hermit philosopher in tattered robes, elongated;", "subject")
+ck("译不出时保留英文原文", "hermit" in out and "跪" not in out)
+# 不得出现中英拼接残骸
+for bad in ("雪y", "跪ing", "芦苇荡s", "汉使 ,"):
+    ck(f"无拼接残骸 {bad!r}", bad not in _seg("SUBJECT: Su Wu kneeling in snow by reeds, 汉使 ,", "subject"))
+
+md = render_script({
+    "topic": "T", "title": "测试", "style_id": "chinese_lianhuanhua_classic",
+    "recommended_template": "c",
+    "pages": [{
+        "page": 1, "highlight": "起", "caption": "题",
+        "body": "正文内容在这里。" * 12, "keywords": ["甲", "乙"],
+        "visual": "SUBJECT: Su Wu holding staff; ACTION: Su Wu kneels; BACKGROUND: snow",
+    }],
+})
+ck("脚本含三行结构", all(k in md for k in ("文字：", "高亮：", "画面：")))
 
 print()
 print("=" * 46)
