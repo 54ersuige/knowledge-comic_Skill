@@ -134,6 +134,20 @@ ck("preflight 拦截 0 字节图",
 shutil.rmtree(tmp, ignore_errors=True)
 
 print()
+print("=== E. 正文长度代码层兜底 (v0.3.4) ===")
+# planner prompt 早就承诺「超过 150 字自动砍到 150」，但代码里一直没实现。
+# 实测真实 LLM 正文达标率 5/10~9/10 波动，说明光靠 prompt 约束不住，
+# 用户"文字不能过多"的硬偏好必须由代码层守住。
+from scripts.core.planner import _clamp_body  # noqa: E402
+
+ck("不超限原样返回", _clamp_body("短正文。") == "短正文。")
+ck("150 字整原样保留", len(_clamp_body("字" * 150)) == 150)
+ck("151 字截到 150", len(_clamp_body("字" * 151)) == 150)
+ck("300 字截到 150", len(_clamp_body("字" * 300)) == 150)
+ck("句号边界收刀", _clamp_body("甲" * 145 + "。" + "乙" * 100).endswith("。"))
+ck("空串安全", _clamp_body("") == "")
+
+print()
 print("=" * 46)
 print("FAILED:", FAIL if FAIL else "NONE — 全部通过")
 sys.exit(1 if FAIL else 0)

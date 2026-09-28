@@ -31,18 +31,34 @@ v0.2（2026-09-20）**完全去掉** `subprocess.run([sys.executable, review.py]
 
 ### Checkpoint 1：分镜审阅（Step 1.5）—— Mavis 必做
 
-**触发时机**：LLM 生成 storyboard.json 后、跑图前。
+**触发时机**：LLM 生成 storyboard.json 后、跑图前。**这是"生图前定方向和内容"的关卡** —— 跑图很贵（12 页通常十几分钟 + 额度），分镜错了后面全白费。
 
 **Mavis 操作**：
 1. 调 `step_plan(topic, bullets, style_id, template_id)` 拿到 `(sb, job_id, work_dir)`
-2. 用 `read tool` 读 `work_dir/storyboard.json`
-3. 把分镜摘要（标题 / 副标题 / 每页 caption + highlight + key_visual + body 摘要）展示给用户
+2. 调 **`step_review_storyboard(job_id)`** 拿到 `(markdown, html_path)` —— v0.3.4 新增，自动体检 + 生成审阅页
+3. 把 Markdown 审阅卡摘要贴给用户；如用户想自己安静细看，用 `deliver-assets` 送 HTML 审阅页
 4. 用 `ask_user` 让用户拍板
+
+**为什么不用直接给 storyboard.json**：那个文件有 `keywords` / `body` / `visual` / `highlight` 四层嵌套字段，人很难快速判断"哪几页不合格"。审阅页把体检结果直接算出来，问题页排最前、全文展开，合格的页只给一行。
+
+**自动体检检查项**（`scripts/core/review_page.py`，纯规则不调 LLM）：
+
+| 检查项 | 级别 | 判据 |
+|---|---|---|
+| 正文 100-150 字 | ❌ >150 / ⚠️ <100 | 用户硬偏好：图为主文字为脚注 |
+| keywords ≥3 个 | ❌ 空 / ⚠️ 不足 | 空则朱砂红高亮整条链路失效 |
+| `[GENDER:xx]` 标记 | ❌ 缺（仅连环画） | 缺失会把男性主角画成女性脸 |
+| caption 非空 | ❌ 空 | 章节题决定读者翻页动机 |
+| visual ≥300 字 | ⚠️ 偏短 | 七要素建议，信息密度不足的先兆 |
+| 零文字声明 | ⚠️ 缺 | 画面出字是本项目最常复发的 bug |
+| 多人物构图 | ⚠️ 单人（仅连环画） | 连环画要求 3+ 主人物 + 远景配角 |
+| 章节大字跨章唯一 | ⚠️ 重复 | highlight 是读者第一眼看到的内容 |
 
 **用户操作（ask_user 选项）**：
 - ✅ **接受** — 跑图
-- 🔧 **改某页 caption/visual/body** — Mavis 调 `scripts/review.py:set_page_field(job_id, page, field, value)` 或直接编辑 JSON
+- 🔧 **改某页 caption/visual/body** — Mavis 调 `review.set_page_field(job_id, page, field, value)`
 - 🔧 **改 highlight** — 跨章唯一的章节大字
+- 🔄 **修完问题页再审** — 改完重跑 `step_review_storyboard` 确认
 - 🔄 **重跑整组分镜** — 重跑 step_plan
 - ❌ **拒绝** — 删 work_dir
 
@@ -51,6 +67,16 @@ v0.2（2026-09-20）**完全去掉** `subprocess.run([sys.executable, review.py]
 - caption 是章节题，决定读者翻页动机
 - visual 决定画面信息密度（本文最容易被 LLM 偷懒的地方）
 - body 是正文（可以接受 LLM 默认，但前 3 项必须过手）
+
+**代码示例**：
+```python
+md, html_path = step_review_storyboard(job_id)
+print(md)                                  # 贴给用户
+deliver_assets(html_path)                  # 想细看时送 HTML 页
+# 改完某页后重跑体检
+review.set_page_field(job_id, page=3, field="visual", value="新的画面描述")
+md, _ = step_review_storyboard(job_id)      # 确认修好了
+```
 
 ---
 

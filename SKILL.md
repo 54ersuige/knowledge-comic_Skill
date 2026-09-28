@@ -1,10 +1,10 @@
 ---
 name: knowledge-comic
 description: Knowledge comic generator that turns a topic + bullet list into a publication-ready WeChat MP draft. Use when user asks for "知识漫画", "公众号知识漫画", "科普漫画", "典故解读", "历史故事漫画", "一图读懂", "科普文章配图". Hands off the entire pipeline — style recommendation, storyboard split, image generation, article HTML render, and WeChat draft creation — through step-by-step Python APIs that Mavis calls directly inside the conversation.
-version: 0.3.3
+version: 0.3.4
 ---
 
-# Knowledge Comic (WeChat MP) — v0.3.3
+# Knowledge Comic (WeChat MP) — v0.3.4
 
 把「主题 + 要点」变成可一键发布到公众号草稿箱的知识漫画图文。**端到端在 Mavis 对话里逐步执行 + 用户拍板**。
 
@@ -40,6 +40,32 @@ python guide.py "张巡守睢阳"   # 中文主题
 ```
 
 返回 JSON：`{"style_id": "chinese_lianhuanhua_classic", "template_id": "c", "alternates": [...], "rationale": "..."}`
+
+## v0.3.4 核心变化（2026-09-28，分镜审阅页 + 真实题材冒烟测试）
+
+**背景**：用户看完 v0.3.3 产出的 storyboard JSON 提了两个问题——「用户不一定能看懂 JSON」和「这一步是要在生图前确定方向和内容，对吗」。第二个答案是**对的**：`references/user-review.md` 的 Checkpoint 1 就是这个设计，跑图很贵、分镜错了后面全白费。但原来的审阅方式确实不可用——只能让用户看多层嵌套的 JSON 原文。
+
+1. **新增分镜审阅页（`scripts/core/review_page.py` + `step_review_storyboard()`）**
+   - **自动体检**（纯规则，不调 LLM）：8 项硬约束检查，自动算出"哪几页不合格"
+     | 检查项 | 级别 | 判据 |
+     |---|---|---|
+     | 正文 100-150 字 | ❌ >150 / ⚠️ <100 | 用户硬偏好：图为主文字为脚注 |
+     | keywords ≥3 | ❌ 空 / ⚠️ 不足 | 空则朱砂红高亮整条失效 |
+     | `[GENDER:xx]` | ❌ 缺（仅连环画） | 缺失会把男性主角画成女性脸 |
+     | caption 非空 | ❌ | 决定读者翻页动机 |
+     | visual ≥300 字 | ⚠️ | 七要素建议，信息密度不足的先兆 |
+     | 零文字声明 | ⚠️ | 画面出字是最常复发的 bug |
+     | 多人物构图 | ⚠️（仅连环画） | 要求 3+ 主人物 + 远景配角 |
+     | 章节大字唯一 | ⚠️ | highlight 是读者第一眼内容 |
+   - **Markdown 审阅卡**（返回值，可直接贴进对话）：体检看板 + **问题页全文展开** + 全页一览。设计原则是"先结论后细节" —— 全部达标的页只给一行，不刷屏。
+   - **HTML 审阅页**（落盘 `work_dir/storyboard_review.html`）：浏览器打开，逐页详情 + 统计看板 + 按「必修/建议」筛选 tab
+   - 落盘 `storyboard_review.md` 同目录
+
+2. **新增真实题材冒烟测试（`scripts/tests/test_live_smoke.py`）**
+   - **动机**：v0.3.2 / v0.3.3 的两个真 bug（苏武牧羊分类失败、keywords 被解析层丢弃）**都是只有真跑才现形的**，纯 mock 回归看不见「LLM 是否真的按 schema 输出」「解析层是否接住了」。
+   - 默认 **skip**（不烧额度），加 `--live` 才调真 LLM
+   - 题材固定用「苏武牧羊」—— 苏武不在人名表里、又无朝代词，是 v0.3.3 兜底层最易回退的用例
+   - 断言全部对着踩过的坑：风格 / 模板跟随 / keywords 非空 / GENDER 齐全 / 页数 / 审阅模块能处理真实数据
 
 ## v0.3.3 核心变化（2026-09-28，苏武牧羊真实端到端测试暴露的 2 个 bug）
 

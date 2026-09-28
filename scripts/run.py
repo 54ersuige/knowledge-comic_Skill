@@ -42,6 +42,7 @@ from scripts.core.planner import plan_storyboard, Storyboard, StoryPage, recomme
 from scripts.core.image_gen import generate_pages, generate_character_references  # noqa: E402
 from scripts.core import article as article_mod  # noqa: E402
 from scripts.core import publisher as pub_mod  # noqa: E402
+from scripts.core.review_page import check_quality, render_html, render_markdown  # noqa: E402
 from scripts.core.prompts import (  # noqa: E402
     recommend_style,
     recommend_template,
@@ -338,6 +339,69 @@ def step_publish_draft(
         "thumb_media_id": thumb_media_id,
         "thumb_page": thumb_page,
     }
+
+
+def step_review_storyboard(
+    job_id: str,
+    data_dir: Path | None = None,
+    write_files: bool = True,
+) -> tuple[str, Path | None]:
+    """Step 1.5（Checkpoint 1）：分镜审阅 —— 生图前定方向和内容的关卡。
+
+    v0.3.4 新增。原本这一关只能让用户看 storyboard.json 原文，
+    但那个文件有多层嵌套字段（keywords / body / visual / highlight），
+    人很难快速判断"哪几页不合格"。本函数产出两份人可读产物：
+
+      1. **Markdown 审阅卡**（返回值 str）—— 体检看板 + 问题页全文展开 +
+         全页一览。设计成可直接贴进对话：先结论后细节，
+         全部达标的页只给一行，不刷屏。
+      2. **HTML 审阅页**（返回 Path）—— 浏览器打开，逐页详情 + 统计看板 +
+         按「必修/建议」筛选。适合用户想自己安静看一遍的情况。
+
+    跑图很贵，分镜错了后面全白费 —— 所以这一关必须让用户过目。
+
+    Args:
+        job_id: job id
+        data_dir: 数据目录
+        write_files: True=同时把 Markdown / HTML 落盘到 work_dir
+    Returns:
+        (markdown 文本, html 路径 或 None)
+
+    Mavis 在对话里：
+      1. 调本函数拿到 md + html_path
+      2. 把 md 摘要贴给用户；如用户想细看，用 deliver-assets 送 html_path
+      3. 用 ask_user 让用户拍板（接受 / 改某页 / 重跑分镜）
+      4. 改某页用 review.set_page_field(job_id, page, field, value)
+    """
+    cfg = get_config()
+    work_root = data_dir or cfg.data_dir
+    work_dir = work_root / job_id
+    sb_path = work_dir / "storyboard.json"
+    if not sb_path.exists():
+        raise FileNotFoundError(f"storyboard.json not found: {sb_path}")
+
+    raw = json.loads(sb_path.read_text(encoding="utf-8"))
+    health = check_quality(raw)
+    md = render_markdown(raw, health)
+    doc = render_html(raw, health)
+
+    html_path = None
+    if write_files:
+        (work_dir / "storyboard_review.md").write_text(md, encoding="utf-8")
+        html_path = work_dir / "storyboard_review.html"
+        html_path.write_text(doc, encoding="utf-8")
+
+    stats = health["stats"]
+    print(
+        f"[review] job={job_id}  pages={stats['pages']}  "
+        f"error={stats['errors']}  warn={stats['warns']}  "
+        f"body_ok={stats['body_ok']}/{stats['pages']}  "
+        f"kw_ok={stats['kw_ok']}/{stats['pages']}"
+    )
+    if stats["errors"]:
+        bad = sorted({i.page for i in health["issues"] if i.level == "error"})
+        print(f"[review] 必修页: {bad} —— 生图前应先修")
+    return md, html_path
 
 
 # ============ Mavis 对话流辅助 step（v0.2.4 补齐） ============

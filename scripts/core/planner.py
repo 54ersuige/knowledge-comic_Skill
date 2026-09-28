@@ -428,6 +428,33 @@ def _build_planner_user_msg(topic: str, bullets: list[str], style_id: str, canon
     return user_msg
 
 
+BODY_MAX_CHARS = 150
+
+
+def _clamp_body(text: str) -> str:
+    """v0.3.4：按 prompt 里早已承诺的规则截断超长正文。
+
+    planner prompt 第 295/304/382 行反复写了「严格 100-150 字，超过 150 字
+    自动砍到 150」，但这个"自动砍"从来没在代码里实现过 —— 只在 prompt 里承诺。
+    实测三次真实跑，正文达标率在 5/10 ~ 9/10 之间波动（LLM 对字数约束本就有
+    合理波动），说明**光靠 prompt 约束不住**。
+
+    用户的硬偏好是「图为主、文字为脚注，100-150 字/页」，文字太重会压过画面。
+    所以上限必须在代码层兜住，不能指望模型自觉。
+
+    截断在句号边界下刀，尽量不把句子劈成半截；找不到句号就硬截。
+    """
+    s = (text or "").strip()
+    if len(s) <= BODY_MAX_CHARS:
+        return s
+    head = s[:BODY_MAX_CHARS]
+    # 在最后一个句末标点处收刀（留得下就留，找不到就硬截）
+    for i in range(len(head) - 1, max(0, len(head) - 40) - 1, -1):
+        if head[i] in "。！？；…":
+            return head[:i + 1]
+    return head
+
+
 def _call_llm_storyboard(
     topic: str,
     bullets: list[str],
@@ -541,7 +568,7 @@ def _call_llm_storyboard(
             caption=p.get("caption", ""),
             dialogue=p.get("dialogue", ""),
             narration=p.get("narration", ""),
-            body=p.get("body", ""),
+            body=_clamp_body(p.get("body", "")),
             key_visual=p.get("key_visual", ""),
             highlight=p.get("highlight", ""),
             # v0.3.3 修复：此处原先漏了 keywords，导致 LLM 即使按 schema 输出了
