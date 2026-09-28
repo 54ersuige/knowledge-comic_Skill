@@ -269,6 +269,27 @@ _txt = re.sub(r"<[^>]+>", "|", _txt)
 _long = [b.strip() for b in _txt.split("|") if len(b.strip()) > 90]
 ck("渲染后无 90 字以上裸文本块", not _long, str(_long[:1]))
 
+# v0.3.8.1：正文不缩进。首行缩进是"印刷体连续正文"的规矩，
+# 现在一句一段、靠段间距标明边界，缩进只会让左边参差。
+ck("正文不含首行缩进", "text-indent" not in _html_c)
+ck("e 模板正文也不含缩进",
+   "text-indent" not in render_layout_preview(_sb, template="e"))
+
+# v0.3.8.1：「定格瞬间」曾用 _extract_quote(body) 从正文抽句子当引文，
+# 导致和正文段落完全重复。无 dialogue 时宁可不渲染这张卡。
+_html_dup = render_layout_preview(_sb, template="c")
+# HTML 里「定 格 瞬 间」字间有 span/空格，直接找关键片段
+ck("无 dialogue 时不渲染定格瞬间卡",
+   "瞬" not in _html_dup and "定 格" not in _html_dup,
+   "(实际出现 %d 次)" % _html_dup.count("瞬"))
+_sb_dlg = Storyboard(topic="T", style_id="chinese_lianhuanhua_classic", pages=[
+    StoryPage(page=1, visual="SUBJECT: Su Wu; // 苏武", body="正文第一句。正文第二句。",
+              caption="题", highlight="起", keywords=["苏武"], dialogue="宁死不屈。"),
+])
+_h = render_layout_preview(_sb_dlg, template="c")
+ck("有 dialogue 时渲染定格瞬间卡", "瞬" in _h and "定" in _h)
+ck("定格瞬间内容取自 dialogue", "宁死不屈" in _h)
+
 print()
 print("=" * 46)
 print("FAILED:", FAIL if FAIL else "NONE — 全部通过")

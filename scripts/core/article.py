@@ -579,7 +579,12 @@ def render_template_c(inp: ArticleInput) -> str:
     for i, page in enumerate(sb.pages):
         body = page.body or page.narration or ""
         section_num = _cn_section(page.page)
-        quote = _extract_quote(body)
+        # v0.3.8.1：「定格瞬间」只放**真正的对话/旁白**。
+        # 原先用 _extract_quote(body) 从正文里抽一句话当引文，结果它必然
+        # 和上面的正文段落重复 —— 读者会看到同一句话出现两次。
+        # 现在只认 page.dialogue；没有 dialogue 就不渲染这张卡，
+        # 宁可少一个装饰，也不要重复内容。
+        quote = (page.dialogue or "").strip()
 
         # 章节号：朱砂小标 + h2 大字 紧凑布局
         out.append(
@@ -615,30 +620,25 @@ def render_template_c(inp: ArticleInput) -> str:
 
         # 正文 (line-height 1.9, 两端对齐) — v0.2.7.4 关键词高亮 + v0.2.9 per-page keywords
         # v0.3.8：切成 2-3 个短段，别让读者面对一整块 150 字
+        # v0.3.8.1：去掉首行缩进 —— 缩进是"印刷体连续正文"的规矩，
+        # 靠它标识段首。现在是一句一段、段间距已标明边界，再缩进只会
+        # 让左边参差不齐；现代公众号主流排版也不用缩进。
         if body:
             page_kws = getattr(page, 'keywords', []) or []
-            for i2, seg in enumerate(_split_paragraphs(body)):
-                indent = "text-indent:2em;" if i2 == 0 else ""
+            for seg in _split_paragraphs(body):
                 out.append(
                     f'<p style="font-size:15px;line-height:26px;color:#1a1a1a;'
-                    f'margin:0 20px 10px 20px;{indent}'
+                    f'margin:0 20px 14px 20px;'
                     f'text-align:justify;">'
                     f'{_highlight_keywords(seg, page_kws)}</p>'
                 )
 
         # 数据卡 / 引文卡 (v0.2.7.9: "定格瞬间" 字号加大 + 浅朱砂背景色块)
-        if quote and len(quote) >= 4:
-            # v0.3.8：原来这里渲染 body 第一句，导致「定格瞬间」和上面的正文
-            # 第一段**内容完全重复**（读者会看到同一句话出现两次）。
-            # 现在「定格瞬间」只显示 quote 本身（对话/旁白），
-            # 没有 quote 时才退回 body 第二句，且不与第一段重叠。
-            content_src = quote.strip()
-            if not content_src and body:
-                segs = _split_paragraphs(body)
-                content_src = segs[1] if len(segs) > 1 else ""
+        if len(quote) >= 4:
+            # v0.3.8.1：只渲染 page.dialogue，不再从 body 抽句子，
+            # 避免和正文段落内容重复。
             page_kws = getattr(page, 'keywords', []) or []
-            content_html = (_highlight_keywords(content_src, page_kws)
-                            if content_src else _esc(quote))
+            content_html = _highlight_keywords(quote, page_kws)
 
             out.append(
                 f'<p style="font-size:11px;color:#9b2332;'
@@ -831,11 +831,11 @@ def render_template_e(inp: ArticleInput) -> str:
                     f'<p style="font-size:13px;line-height:1.8;color:#1a1a1a;'
                     f'margin:0;font-weight:500;">{_esc(first)}</p></div>'
                 )
-                # 后续句做正文（分段）
+                # 后续句做正文（分段）—— v0.3.8.1 同样去掉首行缩进
                 for s in sentences[1:]:
                     out.append(
                         f'<p style="font-size:13px;line-height:1.9;color:#2a2a2a;'
-                        f'margin:0 20px 8px 20px;text-align:justify;text-indent:2em;">'
+                        f'margin:0 20px 8px 20px;text-align:justify;">'
                         f'{_esc(s)}</p>'
                     )
 
