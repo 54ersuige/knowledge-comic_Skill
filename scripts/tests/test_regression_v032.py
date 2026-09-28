@@ -162,7 +162,8 @@ from scripts.core.planner import Storyboard, StoryPage  # noqa: E402
 
 # 能译出的 → 中文
 ck("人名道具动作 -> 中文",
-   _seg("SUBJECT: Su Wu holding staff, kneeling in snow;", "subject") == "苏武 手捧 旌节 跪地")
+   _seg("SUBJECT: Su Wu holding staff, kneeling in snow;", "subject")
+   == "苏武 手捧 旌节 跪地 雪")
 ck("长词吃掉短词",
    "旌节 旌节" not in _seg("SUBJECT: Su Wu presenting the bare bamboo staff;", "subject"))
 ck("动作段 -> 中文", "跪地" in _seg("ACTION: Su Wu kneels deeply, bowing;", "action"))
@@ -176,16 +177,57 @@ ck("page_elements 同时支持 dict 与 dataclass",
    len(page_elements({"visual": "SUBJECT: Su Wu;"})) == 1
    and len(page_elements(StoryPage(page=1, visual="SUBJECT: Su Wu;"))) == 1)
 
-# v0.3.6 核心：分镜内容必须内嵌进 layout_preview.html
+# v0.3.7：用户反馈「有英文看不懂 + 内容显示不全」。
+# 解法是让 planner 在每段写 `// 中文速记`，抽取时优先用它。
+_v = ("Character bible: [GENDER:male] SUBJECT: Su Wu, a Han-Chinese diplomat "
+      "// 苏武 汉使; SECONDARY: two attendants // 双侍从; "
+      "ACTION: Su Wu kneeling in snow // 跪雪地; "
+      "CAMERA: Extreme wide shot, high angle, 24mm, deep focus // 大远景 俯拍; "
+      "MOOD: somber, desaturated blue-white // 肃穆 低饱和")
+ck("速记优先于英文", _seg(_v, "subject") == "苏武 汉使")
+ck("速记-景别", _seg(_v, "camera") == "大远景 俯拍")
+ck("速记-情绪", _seg(_v, "mood") == "肃穆 低饱和")
+ck("Character bible 前缀不吞掉 SUBJECT", "苏武" in _seg(_v, "subject"))
+ck("同标签多次出现取最后一个",
+   _seg("SUBJECT: Su Wu a // 甲; ACTION: x // 乙; SUBJECT 2: Li Ling b", "subject") == "李陵")
+
+# 无速记时靠术语词典兜底（老数据路径）
+ck("无速记-术语词典翻景别",
+   _seg("CAMERA: wide shot, low angle", "camera") == "远景 仰拍")
+ck("无速记-术语词典翻情绪",
+   _seg("MOOD: somber, desaturated palette", "mood").startswith("肃穆 低饱和"))
+
+# v0.3.7: LLM 常改用 Foreground/Midground/Background 自然段写法，
+# 抽取器必须同时认这两种格式，否则「主体/景别」会空、「背景」显示英文。
+_vb = ("Character bible: Su Wu, 45yo envoy. [GENDER:male] Expression: grim_resolve. "
+       "Wide establishing shot, low angle, 24mm lens, deep focus. "
+       "Foreground: heavy iron chains casting long shadows. "
+       "Midground: Su Wu sitting in a dark cell, staff visible. "
+       "Background: vast grey sky, distant snow-capped mountains. "
+       "Lighting: hard overhead sunlight. Mood: solemn, desaturated blue-grey.")
+ck("B写法-背景", _seg(_vb, "background") != "")
+ck("B写法-情绪", _seg(_vb, "mood") != "")
+ck("B写法-景别(混在角色段)", "远景" in _seg(_vb, "camera") or "全景深" in _seg(_vb, "camera"))
+ck("B写法-动作(取 Midground)", "苏武" in _seg(_vb, "action"))
+_els = page_elements({"visual": _vb})
+ck("B写法 page_elements 六要素不全空", len(_els) >= 4, "(%d 项)" % len(_els))
+ck("B写法 page_elements 全部无省略号",
+   all("…" not in v for _, v in _els))
+
+# v0.3.7：不得出现「…」截断残缺
+_hard = "BACKGROUND: vast snowy horizon, distant city walls with flying eaves"
+ck("长内容不出现省略号截断", "…" not in _seg(_hard, "background"))
+
+# layout_preview 内嵌
 _sb = Storyboard(topic="T", style_id="chinese_lianhuanhua_classic", pages=[
-    StoryPage(page=1, visual="SUBJECT: Su Wu; ACTION: Su Wu kneels;", body="正文。" * 20,
+    StoryPage(page=1, visual="SUBJECT: Su Wu; // 苏武", body="正文。" * 20,
               caption="题", highlight="起", keywords=["苏武", "北海"]),
-    StoryPage(page=2, visual="SUBJECT: Li Ling; ACTION: Li Ling weeps;",
-              body="正文。" * 20, caption="题2", highlight="承", keywords=["李陵"]),
+    StoryPage(page=2, visual="ACTION: Li Ling weeps; // 李陵", body="正文。" * 20,
+              caption="题2", highlight="承", keywords=["李陵"]),
 ])
 _html = render_layout_preview(_sb, template="c")
 ck("layout_preview 含分镜意图块", _html.count("本图分镜意图") == 2)
-ck("layout_preview 含要素标签", _html.count(">主体<") == 2)
+ck("layout_preview 含要素标签", _html.count(">主体<") + _html.count(">动作<") == 2)
 ck("layout_preview 含关键词", _html.count("关键词：") == 2)
 ck("layout_preview CSS 已注入", ".kcf-note{" in _html)
 ck("layout_preview 占位图用 data URI", "data:image/svg" in _html)

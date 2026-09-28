@@ -323,6 +323,27 @@ visual 字段**严禁**包含以下元素（即使概念正确，模型会把字
 6. **LIGHTING** — 光源 + 方向 + 色温 + 软硬（"hard side-light from a single candle on the left, deep crimson wash from behind"），禁用泛词 "dramatic lighting"
 7. **MOOD/PALETTE** — 情绪 + 配色绑定（"tense anticipation in desaturated ink black + cinnabar red + bone white"）
 
+### v0.3.7 每段必须附中文速记（新增 · 用户可读性硬要求）
+
+用户要审阅分镜「文字说的」和「画面画的」对不对得上，但画面描述如果全是英文，
+用户看不懂；如果被截断，信息就残缺。所以**每个要素段末尾必须追加 `// 中文` 速记**：
+
+```
+SUBJECT: Su Wu, 30yo Han envoy, wearing formal dark robe // 苏武 汉使 出塞
+ACTION: Su Wu bows deeply before the departing court // 苏武 躬身 辞行
+BACKGROUND: vast snowy horizon, distant city walls with flags // 雪原 远城 旌旗
+CAMERA: Extreme wide shot, high angle, 24mm lens, deep focus // 大远景 俯拍
+MOOD: solemn duty, desaturated blue-white palette // 庄严 克制的蓝白
+```
+
+**规则**：
+1. `//` 之后必须是**中文**，写给用户看，不是写给模型的
+2. 3-6 个短词，用空格或「·」分隔，**不写句子**
+3. 必须覆盖该段的画面要点（人物 / 动作 / 关键道具 / 场景）
+4. 英文部分照旧保留（要喂给图像模型），中文部分是给人看的
+
+这样 layout_preview 展示分镜时直接用中文速记，用户不用读英文，也不用看被截断的长句。
+
 ### 角色一致性五件套 bible（v0.2.3 升级）
 
 不要写单一长段落描述（模型只抓前 30% 关键词）。每页 visual 开头必须以**五个独立锚点**列出角色：
