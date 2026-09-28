@@ -403,6 +403,68 @@ _HIGHLIGHT_KEYWORDS: list[str] = [
 ]
 
 
+def _split_paragraphs(text: str, max_len: int = 42,
+                      merge_short: bool = True) -> list[str]:
+    """把长正文切成 2-3 个短段 —— 公众号读者没耐心读一整块 150 字。
+
+    v0.3.8：用户反馈「不要出现大段大段文字」。
+    切分原则：
+      1. 先按句号/问号/叹号断句（**引号内的句末标点不切**，
+         否则会出现裸露的 `”` 这种碎片）
+      2. 句子仍超长（>max_len）再按逗号/分号二次切
+      3. merge_short=True 时合并过短的相邻片段，避免「3 个字一段」的碎片；
+         纯拆句场景传 False（每句都独立成段）
+    """
+    if not text:
+        return []
+
+    # 按句末标点切，但要在引号闭合后才算真正结束：
+    # “…说。”后面如果紧跟右引号/右括号，一并归入本句。
+    raw = re.findall(r"[^。！？!?]*[。！？!?]+[”’\"')\]】]*|[^。！？!?]+$", text)
+    parts = [p.strip() for p in raw if p.strip()]
+
+    out: list[str] = []
+    for p in parts:
+        if len(p) <= max_len:
+            out.append(p)
+            continue
+        # 超长句：按逗号/分号二次切，同样避开引号内
+        subs = re.findall(r"[^，,；;：:]+[，,；;：:]?[”’\"')\]】]*", p)
+        subs = [s.strip() for s in subs if s.strip()]
+        buf = ""
+        for s in subs:
+            if buf and len(buf) + len(s) > max_len:
+                out.append(buf)
+                buf = s
+            else:
+                buf += s
+        if buf:
+            out.append(buf)
+
+    if not merge_short:
+        return out
+
+    merged: list[str] = []
+    for p in out:
+        if merged and len(merged[-1]) < 12:
+            merged[-1] += p
+        else:
+            merged.append(p)
+    return merged
+
+
+def _first_sentence(text: str) -> str:
+    """取第一句完整句（**含句末标点**）。
+
+    v0.3.8 修复：原实现 `body.split("。")[0]` 会把句号吃掉，
+    导致「定格瞬间」里出现裸露的右引号 `”`。
+    """
+    if not text:
+        return ""
+    m = re.search(r"^(.+?[。！？!?])", text.strip(), re.S)
+    return (m.group(1) if m else text.strip()).strip()
+
+
 def _highlight_keywords(text: str, extra_keywords: list[str] | None = None) -> str:
     """v0.2.7.4: 把 body 里的关键人名/年份/事件用朱砂红+加粗包裹。
 
@@ -552,21 +614,31 @@ def render_template_c(inp: ArticleInput) -> str:
             )
 
         # 正文 (line-height 1.9, 两端对齐) — v0.2.7.4 关键词高亮 + v0.2.9 per-page keywords
+        # v0.3.8：切成 2-3 个短段，别让读者面对一整块 150 字
         if body:
             page_kws = getattr(page, 'keywords', []) or []
-            out.append(
-                f'<p style="font-size:15px;line-height:24px;color:#1a1a1a;'
-                f'margin:0 20px 16px 20px;'
-                f'text-align:justify;text-indent:2em;">'
-                f'{_highlight_keywords(body, page_kws)}</p>'
-            )
+            for i2, seg in enumerate(_split_paragraphs(body)):
+                indent = "text-indent:2em;" if i2 == 0 else ""
+                out.append(
+                    f'<p style="font-size:15px;line-height:26px;color:#1a1a1a;'
+                    f'margin:0 20px 10px 20px;{indent}'
+                    f'text-align:justify;">'
+                    f'{_highlight_keywords(seg, page_kws)}</p>'
+                )
 
         # 数据卡 / 引文卡 (v0.2.7.9: "定格瞬间" 字号加大 + 浅朱砂背景色块)
         if quote and len(quote) >= 4:
-            # 内容：body 第一句完整（带关键词朱砂高亮）
-            first_full = body.split("。")[0].strip() if body else quote.strip()
+            # v0.3.8：原来这里渲染 body 第一句，导致「定格瞬间」和上面的正文
+            # 第一段**内容完全重复**（读者会看到同一句话出现两次）。
+            # 现在「定格瞬间」只显示 quote 本身（对话/旁白），
+            # 没有 quote 时才退回 body 第二句，且不与第一段重叠。
+            content_src = quote.strip()
+            if not content_src and body:
+                segs = _split_paragraphs(body)
+                content_src = segs[1] if len(segs) > 1 else ""
             page_kws = getattr(page, 'keywords', []) or []
-            content_html = _highlight_keywords(first_full, page_kws) if first_full else _esc(quote)
+            content_html = (_highlight_keywords(content_src, page_kws)
+                            if content_src else _esc(quote))
 
             out.append(
                 f'<p style="font-size:11px;color:#9b2332;'
@@ -804,10 +876,13 @@ def render_template_e(inp: ArticleInput) -> str:
 
 
 def _split_sentences(body: str) -> list[str]:
-    """按 。！？ 拆句,过滤空白,返回非空句子列表。"""
-    import re as _re
-    parts = _re.split(r'(?<=[。！？])', body)
-    return [s.strip() for s in parts if s.strip()]
+    """按 。！？ 拆句。
+
+    v0.3.8 修复：原实现 `_re.split(r'(?<=[。！？])', body)` 会在**引号内部**
+    切开 —— "他说“好。”然后走了。" 会变成 '他说“好。' + '”然后走了。'，
+    渲染出来就是裸露的 `”`。现在复用 _split_paragraphs 的引号感知切分。
+    """
+    return _split_paragraphs(body, max_len=999, merge_short=False)
 
 
 

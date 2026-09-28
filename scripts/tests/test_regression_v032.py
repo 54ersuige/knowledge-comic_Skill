@@ -7,6 +7,7 @@
 默认按 GBK 解析源码会抛 SyntaxError。
 """
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -232,6 +233,41 @@ ck("layout_preview 含关键词", _html.count("关键词：") == 2)
 ck("layout_preview CSS 已注入", ".kcf-note{" in _html)
 ck("layout_preview 占位图用 data URI", "data:image/svg" in _html)
 ck("HTML 未被 _esc 转义成可见文本", "&lt;div" not in _html)
+
+print()
+print("=== G. 排版结构化 + 引号不被劈开 (v0.3.8) ===")
+# 用户反馈「不要出现大段大段文字，读者没耐心」+ 发现引号被切出裸露的 ”
+from scripts.core.article import (  # noqa: E402
+    _first_sentence, _split_paragraphs, _split_sentences,
+)
+
+_body = ("匈奴单于试图用高墙囚禁苏武。起初是软禁，试图消磨意志。"
+         "苏武被安置在冰窖中。这是外交史上的罕见案例。")
+_segs = _split_paragraphs(_body)
+ck("正文被切成多段", len(_segs) >= 3, "(%d 段)" % len(_segs))
+ck("无超长段落", all(len(s) <= 60 for s in _segs),
+   "最长 %d 字" % max(len(s) for s in _segs))
+ck("无碎片段落", all(len(s) >= 12 for s in _segs),
+   "最短 %d 字" % min(len(s) for s in _segs))
+ck("切分后无内容丢失", "".join(_segs).replace(" ", "") == _body.replace(" ", ""))
+
+# 引号：切分点必须在引号闭合之后
+_q = '苏武以“宁死不负汉节”自明心志。匈奴单于赞其“勇士”。'
+ck("引号不被劈开", all(s.count("“") == s.count("”")
+                    for s in _split_paragraphs(_q)))
+ck("_split_sentences 也不劈引号",
+   all(s.count("“") == s.count("”") for s in _split_sentences(_q)))
+ck("_first_sentence 保留句号",
+   _first_sentence("第一句。第二句。") == "第一句。")
+ck("_first_sentence 引号内句号不被提前截断",
+   _first_sentence('他说“好”。然后走了。') == '他说“好”。')
+
+# 真实渲染：整页不该再出现 >60 字的裸文本块（导语/金句除外）
+_html_c = render_layout_preview(_sb, template="c")
+_txt = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", _html_c, flags=re.S)
+_txt = re.sub(r"<[^>]+>", "|", _txt)
+_long = [b.strip() for b in _txt.split("|") if len(b.strip()) > 90]
+ck("渲染后无 90 字以上裸文本块", not _long, str(_long[:1]))
 
 print()
 print("=" * 46)
