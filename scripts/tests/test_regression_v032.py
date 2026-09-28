@@ -288,7 +288,14 @@ _sb_dlg = Storyboard(topic="T", style_id="chinese_lianhuanhua_classic", pages=[
 ])
 _h = render_layout_preview(_sb_dlg, template="c")
 ck("有 dialogue 时渲染定格瞬间卡", "瞬" in _h and "定" in _h)
-ck("定格瞬间内容取自 dialogue", "宁死不屈" in _h)
+ck("定格瞬间内容取自 dialogue", "宁不死" in _h or "宁死不屈" in _h)
+
+# v0.3.8: planner prompt 侧的约定也锁住，避免以后改 prompt 时回退
+from scripts.core.planner import PLANNER_SYSTEM_PROMPT as _PS  # noqa: E402
+
+ck("prompt 要求 body 写成短句", "3-5 个短句" in _PS)
+ck("prompt 说明 dialogue 不得复制 body",
+   "不能" in _PS and "dialogue" in _PS and "重复" in _PS)
 
 print()
 print("=" * 46)

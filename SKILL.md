@@ -1,10 +1,10 @@
 ---
 name: knowledge-comic
 description: Knowledge comic generator that turns a topic + bullet list into a publication-ready WeChat MP draft. Use when user asks for "知识漫画", "公众号知识漫画", "科普漫画", "典故解读", "历史故事漫画", "一图读懂", "科普文章配图". Hands off the entire pipeline — style recommendation, storyboard split, image generation, article HTML render, and WeChat draft creation — through step-by-step Python APIs that Mavis calls directly inside the conversation.
-version: 0.3.4
+version: 0.3.8
 ---
 
-# Knowledge Comic (WeChat MP) — v0.3.4
+# Knowledge Comic (WeChat MP) — v0.3.8
 
 把「主题 + 要点」变成可一键发布到公众号草稿箱的知识漫画图文。**端到端在 Mavis 对话里逐步执行 + 用户拍板**。
 
@@ -40,6 +40,55 @@ python guide.py "张巡守睢阳"   # 中文主题
 ```
 
 返回 JSON：`{"style_id": "chinese_lianhuanhua_classic", "template_id": "c", "alternates": [...], "rationale": "..."}`
+
+## v0.3.8 核心变化（2026-09-28，排版结构化定版）
+
+**背景**：用户审阅苏武牧羊的 layout_preview 后提出「文字内容尽量结构化些，不要出现大段大段文字，现在的读者没有耐心」+「第一句话需要空两格吗」。**这套排版已定为历史/经典故事类的默认规范，后续照此执行，不需再逐条讨论。**
+
+1. **正文切成一句一段**
+   - 新增 `article._split_paragraphs()`：先按句末标点断 → 仍超长（>42 字）按逗号二次切 → 合并 <12 字碎片
+   - planner prompt 侧同步要求：body 写成 **3-5 个短句**（每句 15-40 字），而非一整段
+   - 实测：正文最长块 124 字 → 33 字
+
+2. **去掉首行缩进**
+   - 首行缩进是"印刷体连续正文"的规矩，靠它标识段首。现在一句一段、边界由段间距标明，缩进只会让左边参差
+   - c / e 两个模板统一去掉；段间距 10px → 14px 补偿呼吸感
+
+3. **修引号被劈开**
+   - 根因：`re.split(r'(?<=[。！？])', body)` 会在**引号内部**切开 ——「他说"好。"然后走了。」被拆成 `他说"好。` + `」然后走了。`，渲染出裸露的 `”`
+   - 统一改为引号感知切分：切点必须在右引号/右括号闭合之后
+
+4. **修「定格瞬间」与正文重复**
+   - 根因：`quote` 来自 `_extract_quote(body)` —— 从正文抽一句话当引文，必然和正文段落重复
+   - 现在只渲染 `page.dialogue`（真正的对话/旁白），没有就不渲染这张卡。宁可少一个装饰，也不要重复内容
+   - planner prompt 新增 dialogue 用法说明：只写画面里真有"人说的话"，不得复制 body 里的句子
+
+5. **排版规范写入 `references/templates.md`**，作为历史/经典故事类的默认约定
+
+## v0.3.7 核心变化（2026-09-28，分镜速记全中文 + 兼容 LLM 两种七要素写法）
+
+**背景**：用户看 layout_preview 的「本图分镜意图」区后指出「有英文看不懂 + 内容显示不全」。
+
+1. **planner prompt 要求每段写 `// 中文速记`** —— 让 LLM 自己写中文，比事后拿词表猜着翻译准得多
+2. **取消 46 字硬截断**，抬到 60 且只在分隔符处收刀（之前 `flying…` 砍半，信息残缺）
+3. **术语词典补五类**：镜头（大远景/仰拍/全景深）、配色（肃穆/低饱和）、场景道具（雪原/地窖/铁链）、形容词
+4. **兼容 LLM 的两种七要素写法**（关键修复）—— 实测 LLM 会改用自然段写法：
+   - A) `SUBJECT:` / `ACTION:` / `CAMERA:` / `MOOD:` / `BACKGROUND:`
+   - B) `Character bible:` / 无标签镜头句 / `Foreground:` / `Midground:` / `Background:` / `Lighting:` / `Mood:`
+
+   只认 A 会导致「主体/景别」两栏空、「背景」显示英文。`_split_segments()` 现在两种都认并归一化。
+5. **诚实优先**：只译出一小半时保留完整英文，不给"半吊子中文"
+
+**验证**：苏武牧羊重跑 → 60 条要素 59 条全中文（98%），六要素无空缺，无「…」截断
+
+## v0.3.5 / v0.3.6 核心变化（2026-09-28，Checkpoint 1 收敛为一个产物）
+
+用户连续三次纠正同一件事：**审阅分镜的唯一产物是 `layout_preview.html`，排版和分镜内容必须在同一个文件里**。
+
+- v0.3.4 只给排版（看不出画面画什么）→ v0.3.5 又另开一个分镜脚本文件（用户要两边对照，反而是负担）→ **v0.3.6 合并为一个文件**
+- 现在 `step_layout_preview(job_id)` 同时展示：成品排版 + 每页分镜意图（主体/动作/配角/背景/景别/情绪 + 关键词）
+- 实现坑（都写在代码注释里）：分镜说明**不能**走 `page_image_urls` 通道（模板会 `_esc()` 把 URL 塞进 `<img src>`，整段 HTML 被转义成可见文本）；也**不能用 `<section>` 包裹**（会打乱模板的 section 配平导致整页塌掉）。正解是先用占位图渲染版式，再按 `data-page="N"` 注入说明块
+- `step_story_script()` 降级为**图文对齐诊断**辅助工具：用户发现某页图文不符时调它，直接指出缺哪个动作/哪个人物
 
 ## v0.3.4 核心变化（2026-09-28，分镜审阅页 + 真实题材冒烟测试）
 
@@ -334,7 +383,7 @@ python scripts/run.py publish --job-id kc_xxx
 
 ```
 knowledge-comic/
-├── SKILL.md                  ← 你正在读的（v0.3.3）
+├── SKILL.md                  ← 你正在读的（v0.3.8）
 ├── references/
 │   ├── handraw_styles.md     ← 5 个锁定风格完整定义 + 推荐矩阵
 │   ├── templates.md          ← 3 个排版模板详情 + 配色对照
@@ -473,6 +522,9 @@ knowledge-comic/
 
 ## 变更记录
 
+- **0.3.8**（2026-09-28）：排版结构化定版 —— 正文一句一段（最长块 124→33 字）/ 去首行缩进 / 修引号被劈开 / 定格瞬间不再与正文重复。规范写入 references/templates.md，作为历史经典故事类默认
+- **0.3.7**（2026-09-28）：分镜速记全中文 + 取消截断 + 兼容 LLM 两种七要素写法（60 条要素 98% 中文）
+- **0.3.5/0.3.6**（2026-09-28）：Checkpoint 1 收敛为单一产物 —— layout_preview.html 同时展示排版 + 分镜意图
 - **0.3.3**（2026-09-28）：苏武牧羊真实端到端测试暴露 2 个 bug — 分类器增加史事动作词兜底层（覆盖名单外人名）/ 修复 keywords 在 LLM 解析层被静默丢弃（朱砂红高亮曾整条失效）
 - **0.3.2**（2026-09-28）：全量代码审核修复 7 个 bug — P0 风格推荐对真实题材失效（改加权信号分类器）/ LLM 无 timeout 挂死 / num_pages 两处被丢弃 / mock 历史风格画出现代科学家 / 跑图失败写 0 字节污染下游 / step_rewrite_visual 返回错页；另整理 tests/ + 归档 70 个一次性脚本 + 同步 src/core
 - **0.3.1**（2026-09-24）：`step_publish_draft` 加 `thumb_page` 参数（封面选页，不再固定用第 1 张）
