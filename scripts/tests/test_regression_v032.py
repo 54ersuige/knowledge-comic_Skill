@@ -35,6 +35,15 @@ cases = [
     ("赤壁之战", "chinese_lianhuanhua_classic", "c"),
     ("李白", "chinese_lianhuanhua_classic", "c"),
     ("论语", "chinese_lianhuanhua_classic", "c"),
+    # v0.3.3 名单外用例：人名表里没有"苏武"，也没有朝代词。
+    # 这类"史事动作 + 无名人"题材是名单式分类器的结构性短板，
+    # 必须由 _looks_like_cn_history() 兜底层覆盖，否则会退回 new_yorker。
+    ("苏武牧羊", "chinese_lianhuanhua_classic", "c"),
+    ("苏武北海牧羊", "chinese_lianhuanhua_classic", "c"),
+    ("范仲淹被贬", "chinese_lianhuanhua_classic", "c"),
+    ("卧薪尝胆", "chinese_lianhuanhua_classic", "c"),
+    ("塞北戍边", "chinese_lianhuanhua_classic", "c"),
+    ("负荆请罪", "chinese_lianhuanhua_classic", "c"),
     ("峰终定律", "new_yorker", "e"),
     ("Transformer 注意力机制", "new_yorker", "e"),
     ("心理学与认知", "new_yorker", "e"),
@@ -45,6 +54,11 @@ cases = [
     ("iPhone 与安卓对比", "new_yorker", "e"),
     ("旅行随笔", "new_yorker", "a"),
     ("情感疗愈", "new_yorker", "a"),
+    # 兜底层不得误伤：命中现代商战排除词的题眼应回到商业/通用，而不是历史
+    # （"产品迭代与用户增长" 命中 _MODERN_BLOCKLIST 的 用户/产品 + 商业强信号 增长）
+    ("产品迭代与用户增长", "us_mid_century", "e"),
+    # 含拉丁字母 → 不走中文史事兜底
+    ("产品迭代与用户增长 v2", "us_mid_century", "e"),
 ]
 bad = []
 for t, es, et in cases:
@@ -52,7 +66,7 @@ for t, es, et in cases:
     got_t = P.recommend_template(t)[0]
     if got_s != es or got_t != et:
         bad.append((t, got_s, got_t))
-ck("18 组分类全部正确", not bad, str(bad))
+ck(f"{len(cases)} 组分类全部正确", not bad, str(bad))
 
 print()
 print("=== B. mock storyboard ===")

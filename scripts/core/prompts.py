@@ -849,6 +849,50 @@ _STYLE_TEMPLATE: dict[str, str] = {
 # 模板 a（撕纸手账）的专属场景：情感 / 旅行 / 生活
 _TEMPLATE_A_SIGNALS: tuple[str, ...] = ("情感", "旅行", "游记", "手账", "生活随笔", "成长")
 
+# === v0.3.3 史事动作词兜底层 ===
+# 真实案例："苏武牧羊" 三类信号全落空（苏武不在人物名表 / 无朝代词 /
+# "牧羊" 不在古典双人物句式里）→ 被误判成 new_yorker。
+# 结论：名单永远补不完，必须有一层**不依赖具体人名**的通用规则。
+# 史事动作词（守/牧/贬/谪/流放/乞食/负荆/刺股/卧薪/尝胆…）极强地指示
+# "中国历史人物故事"，且几乎不出现在商业/科技题眼里。
+_CN_HISTORIC_ACTIONS: tuple[str, ...] = (
+    "牧羊", "牧", "守城", "守", "被贬", "贬", "谪", "流放", "流", "乞食", "负荆",
+    "刺股", "卧薪", "尝胆", "投笔", "闻鸡", "凿壁", "悬梁", "囊萤", "映雪",
+    "挂帅", "从军", "戍边", "镇守", "远征", "和亲", "纳谏", "进谏", "谏",
+    "称帝", "登基", "谋反", "兵败", "战死", "殉国", "班师", "凯旋", "班师回朝",
+    "联姻", "纳妃", "封禅", "削藩", "抄家", "流放边疆", "孤军", "苦守",
+)
+
+# 历史人物常见的"姓 + 名"双字结构（列表无法穷举时，靠叙事语境兜底）
+_CN_ASPECT_CONTEXT: tuple[str, ...] = (
+    "中原", "漠北", "塞外", "边关", "西域", "岭南", "中原大地", "匈奴", "胡人",
+    "朝廷", "皇帝", "大臣", "将军", "使节", "朝堂", "皇权", "宫廷", "后宫",
+)
+
+
+def _looks_like_cn_history(topic: str) -> bool:
+    """不依赖人名表的通用中国历史题材识别。
+
+    命中条件（任一）：
+      1. 含史事动作词（牧羊 / 被贬 / 流放 / 卧薪…）
+      2. 含史事语境词（漠北 / 塞外 / 朝廷 / 匈奴…）
+      3. 古典双人物叙事句式
+
+    排除：含拉丁字母/数字，或命中现代商战排除词 —— 那些是现代题眼。
+    """
+    t = topic or ""
+    if not t:
+        return False
+    if _re.search(r"[A-Za-z0-9]", t):
+        return False
+    if any(w in t for w in _MODERN_BLOCKLIST):
+        return False
+    if any(a in t for a in _CN_HISTORIC_ACTIONS):
+        return True
+    if any(c in t for c in _CN_ASPECT_CONTEXT):
+        return True
+    return _looks_like_classical_story(t)
+
 
 def _classify_signals(topic: str) -> tuple[dict[str, int], list[str]]:
     """加权信号分类。返回 (各风格得分, 命中关键词列表)。
@@ -923,8 +967,9 @@ def recommend_style(topic: str) -> tuple[str, list[str]]:
         alternates = [top] + [s for s in _STYLE_TIEBREAK if s != top]
         return top, alternates
 
-    # 名单/关键词覆盖不到，但句式是古典双人物叙事 → 仍判为连环画
-    if _looks_like_classical_story(topic):
+    # v0.3.3：名单/关键词覆盖不到，但句式是史事动作或古典双人物叙事 → 仍判为连环画
+    # （真实案例："苏武牧羊" 人名表里没有苏武，也没有朝代词）
+    if _looks_like_cn_history(topic):
         return "chinese_lianhuanhua_classic", list(
             RECOMMEND_MATRIX["历史/典故/国学/古籍/古典"]
         )
@@ -958,7 +1003,13 @@ RECOMMEND_TEMPLATE_MATRIX: dict[str, tuple[str, ...]] = {
 
 
 def recommend_template(topic: str) -> tuple[str, list[str]]:
-    """基于主题推荐排版模板 ID + 备选（v0.3.2：跟随风格派生 + a 场景信号）。"""
+    """基于主题推荐排版模板 ID + 备选（v0.3.2：跟随风格派生 + a 场景信号）。
+
+    v0.3.3 修复：原先第 3 步"分类器落空 → 回退类型词匹配"会覆盖第 2 步的风格派生结果。
+    命中兜底层（如"苏武牧羊"）时 _classify_signals 为空但 recommend_style 已正确判为
+    连环画，这里却又按类型词匹配返回 e，导致"风格对、模板错"的分裂输出。
+    现在只保留纯粹的元描述输入回退（如"历史故事 XXX"），且必须在风格未命中兜底层时才走。
+    """
     # 1) 情感/旅行/生活 → a（撕纸手账）
     if any(k in (topic or "") for k in _TEMPLATE_A_SIGNALS):
         return "a", ["a", "e", "c"]
@@ -967,14 +1018,12 @@ def recommend_template(topic: str) -> tuple[str, list[str]]:
     style_id, _ = recommend_style(topic)
     primary = _STYLE_TEMPLATE.get(style_id, "e")
 
-    # 3) 分类器全落空时回退到旧的类型词匹配
-    if not _classify_signals(topic)[0]:
+    # 3) 显式类型词输入（"历史故事 XXX" / "心理学 XXX"）优先于默认兜底，
+    #    但仅在风格不是靠 _looks_like_cn_history 兜底判出来时才生效，避免覆盖 2 的结果。
+    if not _classify_signals(topic)[0] and not _looks_like_cn_history(topic):
         for kw, templates in RECOMMEND_TEMPLATE_MATRIX.items():
             if any(k in topic for k in kw.split("/")):
                 return templates[0], list(templates)
-        return RECOMMEND_TEMPLATE_MATRIX["通用/公众号"][0], list(
-            RECOMMEND_TEMPLATE_MATRIX["通用/公众号"]
-        )
 
     order = ["c", "e", "a"] if primary == "c" else ["e", "c", "a"]
     if order[0] != primary:
