@@ -544,6 +544,11 @@ def _call_llm_storyboard(
             body=p.get("body", ""),
             key_visual=p.get("key_visual", ""),
             highlight=p.get("highlight", ""),
+            # v0.3.3 修复：此处原先漏了 keywords，导致 LLM 即使按 schema 输出了
+            # keywords 也会在这一步被静默丢弃 —— 实测苏武牧羊 10 页全部为空，
+            # 朱砂红高亮整条链路失效。v0.2.9 加字段时只改了 prompt 和 dataclass，
+            # 忘了同步这里的解析层。
+            keywords=p.get("keywords", []) or [],
         )
         for p in data["pages"]
     ]
