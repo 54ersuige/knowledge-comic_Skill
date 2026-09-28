@@ -17,6 +17,7 @@ v0.2.2（2026-09-21）新增第 4 风格：
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -37,6 +38,32 @@ ZERO_TEXT_BOOST = (
     "ABSOLUTELY NO TEXT on the image. NO English signage. NO fake letters. "
     "NO numbers. NO digits. NO math symbols. NO Japanese kana. NO Chinese characters. "
     "NO speech bubbles. NO caption boxes. NO watermarks. NO labels. NO arrows-with-words."
+)
+
+# === 中国画构图 booster（替代 cinematic 三件套） ===
+# v0.2.5 (2026-09-22)：历史典故类风格 (chinese_lianhuanhua_classic / cn_xuanfeng / guochao_manhua)
+# 必须用中国画构图语言（散点透视/留白/平面色块/白描+朱砂勾线），不能用西方镜头语言，
+# 否则模型会跑偏现代写实风（电影截图/3D 渲染/油画）。
+CHINESE_PAINTING_BOOST = """
+CHINESE PAINTING COMPOSITION (mandatory - this REPLACES the cinematic framework for traditional Chinese styles):
+- FRAMING: traditional Chinese handscroll or vertical hanging scroll layout. ASYMMETRIC PLACEMENT: subject on one side, generous negative space on the other. NOT centered, NOT Western rule-of-thirds photo framing.
+- PERSPECTIVE: classical Chinese multi-point perspective (散点透视). Background, midground, foreground can use DIFFERENT vantage points in the same frame. NO Western single-point perspective.
+- NEGATIVE SPACE (留白): rice-paper-white space is a COMPOSITIONAL ELEMENT, not emptiness. Use it to convey atmosphere, vastness, fog, or dramatic tension.
+- DEPTH LAYERS: each layer separated by ink-wash tone or brush stroke. NO photographic DoF blur, NO atmospheric haze, NO volumetric fog. Use ink-line separation between layers.
+- LIGHTING: implied by color planes and brush direction (朱砂/靛青/赭石/墨 矿物色). NO volumetric light, NO cinematic shadows, NO chiaroscuro, NO rim light. Light is painted, not rendered.
+- COLOR: FLAT GONGBI color planes (cinnabar + indigo + ochre + ink + bone-white). NO gradients, NO photographic shading, NO airbrush, NO smooth blending.
+- LINES: white-line + red-line (白描+朱砂勾线) calligraphic outline on figures and key details. NO inked shadows, NO realistic shading on faces.
+- EXPRESSION: theatrical intensity held in dignified restraint. Classical Chinese face coded by brush lines, NOT photographic realism.
+- BRUSHWORK: visible brush bristle strokes, deliberate dry-brush edges (飞白), NOT smooth photorealistic surfaces.
+"""
+
+# === STRICT STYLE 前缀（中国画风格用，防止风格被场景覆盖） ===
+# v0.2.5 (2026-09-22)：把"painted illustration"声明从场景描述里抢到最前，
+# 因为场景描述会覆盖风格声明（这是 AI 图像模型的已知行为）。
+CHINESE_STYLE_PREFIX = (
+    "STRICT STYLE — the entire image is a classical Chinese painted illustration on rice paper "
+    "(宣纸) using brush and mineral pigment. NOT a photograph, NOT a 3D render, NOT an oil "
+    "painting, NOT cinematic, NOT photorealistic. Apply to every pixel of the frame. "
 )
 
 # === 角色一致性硬约束（按风格自动选 anchor）===
@@ -214,18 +241,147 @@ each in its own short clause, IN THIS ORDER):
     "defiant collapse in saturated crimson + cold iron grey + ash black").
 """
 
+# === v0.3.0: chinese_lianhuanhua_classic 中性脸 + 妆发按性别分支 ===
+# 2026-09-24 用户反馈:
+#   - v0.2.9 默认 anchor 把妆发写成"女性化"(桃花腮+花钿+步摇+柳叶眉+樱桃小口),只能用于女性主角
+#   - 当主题是男性主角(张巡/郭子仪),planner visual 写"Zhang Xun 40+ male" 但 anchor 强制桃花腮/步摇
+#     → 模型脸部女性化 + 服饰中性 → 性转成女性
+#   - 修复:把脸部特征 + 妆发分开,脸部中性任何性别共用,妆发按 FEMALE/MALE 独立分支
+
+# v0.3.0 中性脸部特征 (任何性别都共用,不会导致性转)
+CHARACTER_CN_LIANHUANHUA_FACE = (
+    "Chinese illustrated figure on rice paper with ink-brush gongbi technique (NOT 3D, NOT anime, "
+    "NOT photorealistic, NOT oil painting): "
+    "(1) Face shape: distinctively pretty Chinese oval face (鹅蛋脸) with refined chin, smooth "
+    "fair skin with subtle warm undertone, refined natural features that look attractive and "
+    "individual — NOT generic, NOT interchangeable. "
+    "(2) Eyes: elegant slightly upturned Chinese eyes with clear double eyelid, soft dark iris, "
+    "natural lash line, gentle gaze — distinctive and pretty, NOT round anime eyes, NOT phoenix "
+    "triangular. Each character has their OWN eye expression. "
+    "(3) Eyebrows: well-groomed brows appropriate to the gender branch selected below. "
+    "(4) Lip: refined cupid's bow lips with subtle natural color — see gender branch for tint. "
+    "(5) Hair: period-correct Han-Chinese hairstyle with distinctive ornament — see gender branch. "
+    "AGE-SPECIFIC STYLING: "
+    "  - Young leads (20s): delicate refined features. "
+    "  - Mature leads (30s-50s): dignified, composed, with subtle age lines where appropriate. "
+    "Body: classical Chinese figure proportions, slender dignified bearing. "
+    "Costume: period-correct Chinese attire (汉代深衣襦裙 / Tang round-collar robe / Song "
+    "straight-collar) with white-line + red-line calligraphic outline. "
+    "Expression: gentle resolute emotion held in natural restraint, beautiful but never flirtatious. "
+    "OVERALL: museum-quality Chinese illustration that captures individual beauty and personality — "
+    "the technique is traditional 戴敦邦派 but the subjects are lovely, distinctive, modern-feeling "
+    "Chinese people from a top Chinese art book."
+)
+
+# v0.3.0 女性妆发分支 (桃花腮 + 花钿 + 步摇 + 柳叶眉 + 樱桃小口)
+CHARACTER_CN_LIANHUANHUA_GENDER_FEMALE = (
+    "FEMALE-GENDER STYLING (must apply to all female leads in the scene): "
+    "(a) Cheek: subtle pink blush on cheek apples (桃花腮). "
+    "(b) Eyebrows: 柳叶眉 — delicate willow-leaf shaped brows, gently arched, tapered to fine "
+    "point at temple, drawn in single ink line. "
+    "(c) Lip: 樱桃小口 — small refined cupid's bow lips with subtle vermilion tint (桃红), "
+    "gentle and pretty. "
+    "(d) Hair: high topknot 高髻 with gold-inlaid hairpin 步摇 + small delicate flower 簪花 + "
+    "花钿(额间朱砂点) for young lead, simpler for mature female. "
+    "(e) Skin: delicate, fair, subtle pink undertone."
+)
+
+# v0.3.0 男性妆发分支 (玉冠/束发 + 直眉 + 无桃花腮 + 无花钿 + 玉簪/金簪)
+# 不写"square jaw + phoenix eyes + 蓄须"那种过度古典脸(用户反馈:太旧现代读者不亲近)
+# 改写为"现代审美男性":清爽脸 + 适度男性化五官 + 朝代配饰 + 直眉或微剑眉
+CHARACTER_CN_LIANHUANHUA_GENDER_MALE = (
+    "MALE-GENDER STYLING (must apply to all male leads in the scene): "
+    "(a) Cheek: NO pink blush, clean fair skin with subtle warm undertone, dignified. "
+    "(b) Eyebrows: straight thick natural brows, masculine but refined — slightly thicker "
+    "and straighter than female willow-leaf brows, drawn in single ink line. NEVER delicate "
+    "willow-leaf, NEVER phoenix-triangular arch. "
+    "(c) Lip: small to medium lips, natural muted color (NOT vermilion pink), restrained and "
+    "decisive line of jaw. "
+    "(d) Hair: period-correct Han-Chinese — official's cap 幞头/官帽/乌纱 for officials, "
+    "high topknot 高髻 with jade or gold hairpin 玉簪/金簪 for warriors/scholars (NOT 步摇 — "
+    "too feminine), NO 花钿, NO 簪花. Clean dignified, NOT flowing romantic long hair. "
+    "(e) Facial hair: period-appropriate — clean-shaven scholar, thin mustache for officials, "
+    "short dignified beard for commanders, goatee for elders, drawn with individual brush wisps. "
+    "NEVER peach-fuzz, NEVER wispy pretty-boy beard. "
+    "(f) Skin: clean, fair with subtle warm undertone, slightly more angular than female. "
+    "Body posture: upright dignified, broad-shouldered masculine proportions when in armor/robe."
+)
+
+# v0.3.0 默认 anchor = 中性脸 + 女性妆发 (历史典故中国古典风格默认偏女性主角)
+# build_image_prompt 会按 visual 里的 [GENDER:xx] 标记自动切换到对应分支
+CHARACTER_CN_LIANHUANHUA_MODERN = (
+    f"{CHARACTER_CN_LIANHUANHUA_FACE} {CHARACTER_CN_LIANHUANHUA_GENDER_FEMALE}"
+)
+
 CHARACTER_ANCHORS: dict[str, str] = {
     "new_yorker": CHARACTER_SCIENTIST,
     "us_mid_century": CHARACTER_SCIENTIST,
     "cn_xuanfeng": CHARACTER_ANCIENT_CN,
     "guochao_manhua": CHARACTER_ANCIENT_GUOCHAO,
-    "chinese_lianhuanhua_classic": CHARACTER_CN_LIANHUANHUA_ANCESTOR,
+    # v0.2.9: 默认走 modern face variant(用户 2026-09-23 反馈偏好),要纯古典戴敦邦脸
+    # 可显式传 character_anchor=CHARACTER_CN_LIANHUANHUA_ANCESTOR 覆盖
+    "chinese_lianhuanhua_classic": CHARACTER_CN_LIANHUANHUA_MODERN,
 }
 
 
 def get_character_anchor(style_id: str) -> str:
     """根据风格返回对应角色锚点。"""
     return CHARACTER_ANCHORS.get(style_id, CHARACTER_SCIENTIST)
+def _resolve_cn_lianhuanhua_anchor(gender: str, scene_description: str) -> str:
+    """v0.3.0: 按 gender 拼装 chinese_lianhuanhua_classic 锚点。
+
+    优先级:
+      1. 显式 gender 参数(female/male/mixed)— build_image_prompt 调用方直接指定
+      2. 显式 [GENDER:female|male|mixed] 标记在 visual 开头
+      3. visual 描述双向检测:中文代词 + 英文代词同时出现 → mixed
+      4. 否则默认 female
+
+    v0.3.0 背景:v0.2.9 anchor 把妆发硬写"女性化"(桃花腮+花钿+步摇+柳叶眉),
+    导致男性主角(张巡/郭子仪等)被性转成女性。本函数让 build_image_prompt
+    按性别选对应妆发分支,脸部特征共用中性 FACE 子块。
+    """
+    text = (scene_description or "")[:500]
+
+    # 1) 显式 gender 参数(优先)
+    if gender in ("female", "male", "mixed"):
+        g = gender
+    else:
+        # 2) 显式 [GENDER:xx] tag
+        m = re.search(r"\[GENDER:(female|male|mixed)\b\]", scene_description or "", re.IGNORECASE)
+        if m:
+            g = m.group(1).lower()
+        else:
+            # 3) 双向检测:男 + 女关键词都出现 → mixed
+            # 常见中国男性名字识别(姓氏:Zhang/Wang/Li/Liu/Chen/Guo/Sun + 名字含"巡/云/义/为"等常见男性字)
+            known_male_names = ("Zhang Xun", "Guo Ziyi", "Li Bai", "Du Fu", "Confucius", "Lao Tzu")
+            known_female_names = ("Wang Zhaojun", "Yang Guifei", "Wu Zetian", "Princess")
+            female_cn = "她" in text or "妻" in text or "妇" in text or "女" in text
+            male_cn = "他" in text or "夫" in text or "郎" in text or "男" in text or "臣" in text or "将" in text
+            female_pat = r"(?:^|\W)(she|her|woman|women|girl|lady|maiden|princess|wife)(?:\W|$)"
+            male_pat = r"(?:^|\W)(he|his|him|man|men|boy|warrior|general|official|scholar|commander|soldier|husband)(?:\W|$)"
+            female_en = bool(re.search(female_pat, text, re.IGNORECASE))
+            male_en = bool(re.search(male_pat, text, re.IGNORECASE))
+            f_count = int(female_cn) + int(female_en) + sum(1 for n in known_female_names if n in text)
+            m_count = int(male_cn) + int(male_en) + sum(1 for n in known_male_names if n in text)
+            if f_count > 0 and m_count > 0:
+                g = "mixed"
+            elif m_count > 0:
+                g = "male"
+            elif f_count > 0:
+                g = "female"
+            else:
+                g = "female"  # 默认
+
+    base = CHARACTER_CN_LIANHUANHUA_FACE
+    if g == "female":
+        return f"{base} {CHARACTER_CN_LIANHUANHUA_GENDER_FEMALE}"
+    elif g == "male":
+        return f"{base} {CHARACTER_CN_LIANHUANHUA_GENDER_MALE}"
+    else:  # mixed
+        return f"{base} {CHARACTER_CN_LIANHUANHUA_GENDER_FEMALE} {CHARACTER_CN_LIANHUANHUA_GENDER_MALE}"
+
+
+
 
 # === 通用负向关键词 ===
 COMMON_NEGATIVE = (
@@ -391,7 +547,11 @@ STYLES: dict[str, StylePreset] = {
             "NO oil paint, NO impasto, NO canvas, NO Western painting, NO Turner haze, "
             "NO European face, NO Disney, NO anime, NO photorealism, NO 3D, NO Pixar, "
             "NO Western costume, NO round anime eyes, NO pale pink skin, "
-            "NO neon palette, NO Risograph, NO vector flatness, NO text, NO letters"
+            "NO neon palette, NO Risograph, NO vector flatness, "
+            "NO digital illustration, NO commercial CG, NO modern manga, "
+            "NO watercolor wash, NO soft pastel, NO airbrush, NO gradient shading, "
+            "NO modern flat-design illustration, NO commercial concept art, "
+            "NO text, NO letters, NO Chinese characters, NO kana, NO digits, NO watermark"
         ),
     ),
 }
@@ -414,33 +574,123 @@ def list_styles() -> list[dict]:
     ]
 
 
+# v0.2.5 (2026-09-22)：中国画风格分流。哪些风格走 CHINESE_PAINTING_BOOST 而不是 cinematic 三件套。
+TRADITIONAL_CN_STYLES: frozenset[str] = frozenset({
+    "chinese_lianhuanhua_classic",
+    "cn_xuanfeng",
+    "guochao_manhua",
+})
+
+
+# === v0.2.6: scene_description cinematic 词剥离器 ===
+# planner LLM 经常在 visual 字段里写 cinematic 镜头语言（35mm/low angle/deep focus），
+# 这些词会覆盖中国画风格的"painted illustration"声明，导致模型跑偏现代写实。
+# 在中国画风格时自动剥离并替换为构图词。
+import re as _re
+
+_CINEMATIC_TERM_PATTERNS: list[tuple[_re.Pattern, str]] = [
+    (_re.compile(r"\(\s*\d+\s*mm[^)]*\)", _re.IGNORECASE), ""),
+    (_re.compile(r",\s*\d+\s*mm[^,)]*", _re.IGNORECASE), ""),
+    (_re.compile(r"\s\d+\s*mm\s*lens", _re.IGNORECASE), ""),
+    (_re.compile(r"\bwide shot\b", _re.IGNORECASE), "Expansive composition"),
+    (_re.compile(r"\bextreme wide shot\b", _re.IGNORECASE), "Panoramic composition"),
+    (_re.compile(r"\bmedium shot\b", _re.IGNORECASE), "Mid-range composition"),
+    (_re.compile(r"\bclose-up shot\b", _re.IGNORECASE), "Tight facial composition"),
+    (_re.compile(r"\bthree[\s_-]quarter(?:\s+shot)?\b", _re.IGNORECASE), "Mid-range composition"),
+    (_re.compile(r"\blow[\s_-]angle\b", _re.IGNORECASE), "from a low position"),
+    (_re.compile(r"\bhigh[\s_-]angle\b", _re.IGNORECASE), "from a raised position"),
+    (_re.compile(r"\bbird'?s[\s_-]eye\b", _re.IGNORECASE), "from above"),
+    (_re.compile(r"\bdutch[\s_-]tilt\b", _re.IGNORECASE), "oblique perspective"),
+    (_re.compile(r"\bshallow[\s_-]*dof\b", _re.IGNORECASE), "with crisp outlines"),
+    (_re.compile(r"\bdeep[\s_-]*focus\b", _re.IGNORECASE), "with crisp layering"),
+    (_re.compile(r"\bshallow[\s_-]*depth\b", _re.IGNORECASE), "with crisp outlines"),
+    (_re.compile(r"\bdeep[\s_-]*depth\b", _re.IGNORECASE), "with crisp layering"),
+    (_re.compile(r"\beye[\s_-]*level\b", _re.IGNORECASE), "at eye height"),
+    (_re.compile(r"\bcamera\b", _re.IGNORECASE), "viewpoint"),
+    # v0.2.6+: 七要素段标题剥离（planner LLM 写 "CAMERA:" / "PLACEMENT:" 等）
+    (_re.compile(r"\bCAMERA\s*:\s*", _re.IGNORECASE), "Composition: "),
+    (_re.compile(r"\bPLACEMENT\s*:\s*", _re.IGNORECASE), "Position: "),
+    (_re.compile(r"\bDEPTH\s+LAYERS?\s*:\s*", _re.IGNORECASE), "Layers: "),
+    (_re.compile(r"\bLIGHTING\s*:\s*", _re.IGNORECASE), "Light: "),
+    (_re.compile(r"\bMOOD(?:P\s*:\s*|/PALETTE)?\s*:\s*", _re.IGNORECASE), "Mood: "),
+    (_re.compile(r"\bSUBJECT\s*:\s*", _re.IGNORECASE), "Subject: "),
+    (_re.compile(r"\bBACKGROUND\s*:\s*", _re.IGNORECASE), "Background: "),
+    (_re.compile(r"\bACTION\s*:\s*", _re.IGNORECASE), "Action: "),
+]
+
+
+def _strip_cinematic_terms(text: str) -> str:
+    """v0.2.6: 从 scene_description 里剥掉/替换 cinematic 词。"""
+    out = text
+    for pattern, replacement in _CINEMATIC_TERM_PATTERNS:
+        out = pattern.sub(replacement, out)
+    # 折叠多空格
+    out = _re.sub(r"\s{2,}", " ", out).strip()
+    return out
+
+
 def build_image_prompt(
     style_id: str,
     scene_description: str,
     character_anchor: str | None = None,
     extra_negative: str = "",
+    gender: str = "auto",
 ) -> str:
     """拼最终 image prompt。强制角色一致性 + 零文字硬约束。
 
+    v0.2.5 (2026-09-22): 按风格分流 booster —— 中国画风格走 CHINESE_PAINTING_BOOST，
+    避免被 cinematic 镜头语言覆盖到现代写实。
+
+    v0.2.6 (2026-09-22): 中国画风格自动从 scene_description 剥掉 cinematic 词（35mm/low angle...），
+    防止 planner LLM 输出的镜头术语覆盖风格声明。
+
+    v0.3.0 (2026-09-24): 加 gender 参数,chinese_lianhuanhua_classic 按性别拼装 anchor,
+    防止男性主角被性转成女性。gender="auto" 时从 scene_description 检测
+    ([GENDER:xx] tag / 中文代词 / 英文代词)。
+
     Args:
-        style_id: 风格 ID（new_yorker / us_mid_century / cn_xuanfeng）
+        style_id: 风格 ID（new_yorker / us_mid_century / cn_xuanfeng / guochao_manhua / chinese_lianhuanhua_classic）
         scene_description: 单页画面描述（planner 拆出的 visual 字段）
-        character_anchor: 角色一致性锚点（None = 自动按风格选）
+        character_anchor: 角色一致性锚点（None = 自动按风格 + gender 选）
         extra_negative: 额外负向词（如具体场景禁忌）
+        gender: v0.3.0 新增 - auto/female/male/mixed。仅 chinese_lianhuanhua_classic 生效。
     """
     style = get_style(style_id)
     if character_anchor is None:
-        character_anchor = get_character_anchor(style_id)
+        if style_id == "chinese_lianhuanhua_classic":
+            character_anchor = _resolve_cn_lianhuanhua_anchor(gender, scene_description)
+        else:
+            character_anchor = get_character_anchor(style_id)
     negative = style.negative + (", " + extra_negative if extra_negative else "")
 
-    # v0.2.3 升级：把七要素框架 + 镜头语言 + 景深三层 + 表情 anchor 库全部注入
-    assembled = (
-        f"{style.prompt_en} "
-        f"{character_anchor} "
-        f"Scene: {scene_description} "
+    # v0.2.5/0.2.6: 中国画风格用专属 booster + 前置风格声明 + 剥 cinematic 词
+    is_traditional_cn = style_id in TRADITIONAL_CN_STYLES
+    style_prefix = CHINESE_STYLE_PREFIX if is_traditional_cn else ""
+    composition_boost = CHINESE_PAINTING_BOOST if is_traditional_cn else (
         f"{CAMERA_LANGUAGE_KIT} "
         f"{DEPTH_LAYERS_BOOST} "
         f"{CINEMATIC_FRAMEWORK_BOOST} "
+    )
+    if is_traditional_cn:
+        scene_description = _strip_cinematic_terms(scene_description)
+
+    # v0.2.10 修复: 中国画风格强化 STRICT STYLE 夹击 —— 头部 + 角色锚点后再次重复,
+    # 防止 agnes 看到 subject 描述里的"armor / map table / looking up"等现代写实关键词跑偏。
+    style_lock_repeat = ""
+    if is_traditional_cn:
+        style_lock_repeat = (
+            " CRITICAL STYLE LOCK: the entire frame is a classical Chinese painted illustration on rice paper, "
+            "NOT a photograph, NOT a 3D render, NOT commercial CG, NOT modern digital illustration, NOT anime. "
+            "Brush technique and pigment flatness required throughout. "
+        )
+
+    assembled = (
+        f"{style_prefix}"
+        f"{style.prompt_en} "
+        f"{character_anchor} "
+        f"{style_lock_repeat}"
+        f"Scene: {scene_description} "
+        f"{composition_boost} "
         f"{ZERO_TEXT_BOOST} "
         f"Avoid: {negative}"
     )
@@ -449,12 +699,12 @@ def build_image_prompt(
         scene_max = max(2000, 9800 - (len(assembled) - len(scene_description)))
         trimmed_scene = scene_description[:scene_max] + "..."
         assembled = (
+            f"{style_prefix}"
             f"{style.prompt_en} "
             f"{character_anchor} "
+            f"{style_lock_repeat}"
             f"Scene: {trimmed_scene} "
-            f"{CAMERA_LANGUAGE_KIT} "
-            f"{DEPTH_LAYERS_BOOST} "
-            f"{CINEMATIC_FRAMEWORK_BOOST} "
+            f"{composition_boost} "
             f"{ZERO_TEXT_BOOST} "
             f"Avoid: {negative}"
         )
@@ -462,12 +712,18 @@ def build_image_prompt(
 
 
 # === Mavis 推荐矩阵（按主题/受众 → 风格） ===
-# v0.2.4（2026-09-21）按用户新反馈调整：
-#   历史典故/中国故事 → chinese_epic_history 第一优先（中国题材 + 19 世纪欧洲古典/浪漫主义
-#                          历史画语言，David、Delacroix、Géricault 的构图/光影/空间/群像/戏剧动作，
-#                          严禁西方人面孔 + 西方审美）；guochao_manhua / cn_xuanfeng 降为备选。
-#   经济学/心理学 → new_yorker（黑白 Risograph，知识严肃感）
-#   商业模式/品牌/设计 → us_mid_century（mustard+teal+砖红，复古杂志）
+# v0.3.2（2026-09-28）修复 P0 bug：
+#   旧实现拿 **主题类型词**（"历史"/"典故"/"国学"…）去 `k in topic` 匹配真实主题，
+#   而用户输入的是"张巡守睢阳""王昭君出塞"这类**具体题材**，几乎永远不命中，
+#   全部掉进 new_yorker 兜底 —— 导致"历史典故第一推荐 chinese_lianhuanhua_classic"
+#   这条铁律在自动推荐路径上完全失效。
+#   新实现改为「加权信号分类器」(_classify_signals)，见下方 _SIGNAL_TABLES。
+#
+#   RECOMMEND_MATRIX / RECOMMEND_TEMPLATE_MATRIX 保留为：
+#     1) guide.py 的展示表（按 key 配对风格/模板）
+#     2) 分类器全部落空时的兜底
+#   v0.3.2 同时补齐模板矩阵缺失的 武侠 / 宏大 两类 key（原先只有风格矩阵有）。
+
 RECOMMEND_MATRIX: dict[str, tuple[str, ...]] = {
     "历史/典故/国学/古籍/古典": ("chinese_lianhuanhua_classic", "guochao_manhua", "cn_xuanfeng"),
     "经济/商业/职场/管理": ("new_yorker", "us_mid_century", "cn_xuanfeng"),
@@ -483,8 +739,197 @@ RECOMMEND_MATRIX: dict[str, tuple[str, ...]] = {
 }
 
 
+# === v0.3.2 加权信号分类器 ===
+# 权重档位：
+#   10 = 决定性信号（专有名词 / 强领域词），单独出现即可锁定风格
+#    5 = 中等信号（领域通用词）
+#    1 = 弱信号（单字朝代等高误伤风险的词）
+# 匹配规则：子串包含；同一关键词只计一次（取最高权重）；
+#           **长词优先** —— 短词若是被更长命中词的子串则抑制
+#           （保证 "商业模式"(us_mid_century) 能压过 "商业"(new_yorker)，
+#             "西汉" 能压过 "汉"，"王昭君" 能压过 "昭君"）
+
+_CN_PERSON_NAMES: tuple[str, ...] = (
+    # 先秦 / 春秋战国
+    "孔子", "老子", "庄子", "孟子", "荀子", "墨子", "韩非", "商鞅", "屈原", "孙膑",
+    "廉颇", "蔺相如", "赵武灵王", "荆轲", "西施", "王昭君", "昭君", "杨贵妃", "貂蝉",
+    # 秦汉
+    "秦始皇", "刘邦", "项羽", "韩信", "张良", "萧何", "霍去病", "卫青", "李广",
+    "司马迁", "班超", "王莽", "董仲舒",
+    # 三国两晋南北朝
+    "诸葛亮", "刘备", "关羽", "张飞", "赵云", "曹操", "周瑜", "陆逊", "司马懿",
+    "陶渊明", "祖逖", "谢安", "王羲之",
+    # 隋唐
+    "隋炀帝", "李渊", "李世民", "武则天", "唐玄宗", "李白", "杜甫", "白居易", "王维",
+    "李靖", "魏征", "郭子仪", "药葛罗", "仆固怀恩", "张巡", "许远", "南霁云",
+    "颜真卿", "段秀实", "李光弼", "安禄山", "史思明",
+    # 宋元明清
+    "岳飞", "文天祥", "辛弃疾", "陆游", "苏轼", "王安石", "寇准", "包拯",
+    "曾国藩", "左宗棠", "林则徐", "郑成功", "戚继光", "袁崇焕", "李自成", "崇祯",
+    "朱元璋", "朱棣", "康熙", "雍正", "乾隆",
+    # 近现代
+    "孙中山", "鲁迅", "蔡元培",
+)
+
+_CN_DYNASTY_STRONG: tuple[str, ...] = (
+    "西汉", "东汉", "两汉", "汉朝", "西晋", "东晋", "晋朝", "南北朝", "隋朝", "唐朝",
+    "武周", "北宋", "南宋", "宋朝", "元朝", "明朝", "清朝", "春秋", "战国", "秦朝",
+    "三国", "五代十国", "盛唐", "晚唐", "初唐", "明末", "清末", "元末", "民国",
+    "先秦", "上古",
+)
+
+_CN_DYNASTY_WEAK: tuple[str, ...] = ("汉", "唐", "宋", "明", "清", "秦", "晋", "隋", "楚", "齐", "赵", "魏")
+
+_CN_EVENT_STRONG: tuple[str, ...] = (
+    "之战", "之变", "之乱", "之祸", "北伐", "东征", "西征", "南征", "出塞",
+    "围城", "死守", "退敌", "和亲", "政变", "篡位", "登基", "起兵", "勤王",
+    "殉国", "血战", "孤城", "守城", "勤王",
+)
+
+_CN_CLASSIC_MEDIUM: tuple[str, ...] = (
+    "典故", "成语", "寓言", "神话", "传说", "论语", "史记", "资治通鉴", "二十四史",
+    "诗词", "唐诗", "宋词", "古诗", "诗经", "楚辞", "古文", "文言", "国学家",
+    "古籍", "国学", "书法", "水墨",
+    # v0.3.2 补充：古典掌故类题眼（名单覆盖不到的历史轶事靠这些词兜底）
+    "争豪", "斗富", "逸事", "轶事", "掌故", "旧事", "往事", "奇闻", "异闻",
+    "恩仇", "恩怨", "风流", "才子佳人", "红尘",
+)
+
+_WUXIA_MEDIUM: tuple[str, ...] = (
+    "武侠", "江湖", "侠客", "侠义", "门派", "武林", "剑客", "刀客", "镖师",
+)
+
+_NY_STRONG: tuple[str, ...] = (
+    "人工智能", "大模型", "机器学习", "深度学习", "神经网络", "注意力机制",
+    "Transformer", "LLM", "GPT", "算法", "心理学", "认知科学", "行为经济学",
+    "经济学", "峰终定律", "心智", "博弈论", "斯多葛", "芒格", "熵增",
+)
+
+_NY_MEDIUM: tuple[str, ...] = (
+    "心理", "经济", "金融", "投资", "管理学", "科学", "物理", "化学", "生物",
+    "医学", "神经", "演化", "量子", "决策", "情绪", "认知", "科学史",
+)
+
+_MC_STRONG: tuple[str, ...] = (
+    "商业模式", "品牌", "设计", "创业", "增长", "营销", "品牌故事", "视觉设计",
+    "文案", "排版", "配色",
+)
+
+_MC_MEDIUM: tuple[str, ...] = ("商业", "美学", "生活美学", "复古", "包豪斯")
+
+# (关键词, 权重, 目标风格)
+_SIGNAL_TABLE: tuple[tuple[str, int, str], ...] = (
+    *((k, 10, "chinese_lianhuanhua_classic") for k in _CN_PERSON_NAMES),
+    *((k, 10, "chinese_lianhuanhua_classic") for k in _CN_DYNASTY_STRONG),
+    *((k, 10, "chinese_lianhuanhua_classic") for k in _CN_EVENT_STRONG),
+    *((k, 5, "chinese_lianhuanhua_classic") for k in _CN_CLASSIC_MEDIUM),
+    *((k, 5, "chinese_lianhuanhua_classic") for k in _WUXIA_MEDIUM),
+    *((k, 1, "chinese_lianhuanhua_classic") for k in _CN_DYNASTY_WEAK),
+    *((k, 10, "new_yorker") for k in _NY_STRONG),
+    *((k, 5, "new_yorker") for k in _NY_MEDIUM),
+    *((k, 10, "us_mid_century") for k in _MC_STRONG),
+    *((k, 5, "us_mid_century") for k in _MC_MEDIUM),
+)
+
+# 同分时的稳定优先级（越靠前越优先）
+_STYLE_TIEBREAK: tuple[str, ...] = (
+    "chinese_lianhuanhua_classic", "guochao_manhua", "cn_xuanfeng",
+    "new_yorker", "us_mid_century",
+)
+
+# 风格 → 模板默认映射
+_STYLE_TEMPLATE: dict[str, str] = {
+    "chinese_lianhuanhua_classic": "c",
+    "guochao_manhua": "c",
+    "cn_xuanfeng": "c",
+    "new_yorker": "e",
+    "us_mid_century": "e",
+}
+
+# 模板 a（撕纸手账）的专属场景：情感 / 旅行 / 生活
+_TEMPLATE_A_SIGNALS: tuple[str, ...] = ("情感", "旅行", "游记", "手账", "生活随笔", "成长")
+
+
+def _classify_signals(topic: str) -> tuple[dict[str, int], list[str]]:
+    """加权信号分类。返回 (各风格得分, 命中关键词列表)。
+
+    同一关键词被多档命中时只取最高权重；长词优先，短词被更长命中词包含时抑制。
+    """
+    t = topic or ""
+    best: dict[str, tuple[str, int]] = {}
+    for kw, weight, style_id in _SIGNAL_TABLE:
+        if kw not in t:
+            continue
+        prev = best.get(kw)
+        if prev is None or weight > prev[1]:
+            best[kw] = (style_id, weight)
+
+    scores: dict[str, int] = {}
+    hits: list[str] = []
+    for kw in sorted(best, key=len, reverse=True):
+        if any(kw in h for h in hits):   # 短词被更长命中词包含 → 抑制
+            continue
+        hits.append(kw)
+        style_id, weight = best[kw]
+        scores[style_id] = scores.get(style_id, 0) + weight
+
+    return scores, hits
+
+
+# 古典双人物叙事模式（v0.3.2）：像"看石崇与王恺争豪"这种——
+# 纯中文 + 双人物对举 + 古典叙事词。这类题眼不会出现在现代商业/科技主题里
+#（后者通常含拉丁字母或数字），所以可以作为名单覆盖不到时的兜底信号。
+_CLASSICAL_PAIR_PATTERN = _re.compile(
+    r"[\u4e00-\u9fff]{2,4}(?:与|和|同|对)[^\s]{0,2}[\u4e00-\u9fff]{2,4}"
+)
+_CLASSICAL_NARRATIVE_MARKERS: tuple[str, ...] = (
+    "争", "斗", "豪", "富", "义", "仇", "恩", "情", "死", "战", "守", "谏",
+)
+
+# 现代题眼排除词：这些词出现时，"与/和"结构多半是公司/产品对比，不是古典双人物叙事。
+# 不加这个排除，"华为与腾讯的竞争" 会因命中"争"被误判成历史典故。
+_MODERN_BLOCKLIST: tuple[str, ...] = (
+    "竞争", "对比", "哪家", "排名", "评测", "推荐", "公司", "企业", "市场",
+    "品牌", "用户", "产品", "平台", "行业", "股价", "融资", "上市", "估值",
+    "现代", "科技", "互联网", "手机", "创业",
+)
+
+
+def _looks_like_classical_story(topic: str) -> bool:
+    """纯中文双人物 + 古典叙事词 → 判定为历史典故类题眼。
+
+    排除条件：
+      - 含拉丁字母 / 数字（现代商业、科技、财经题眼几乎必含）
+      - 命中现代题眼排除词（"竞争"/"对比"/"公司"… 属于现代商战叙事）
+    """
+    t = topic or ""
+    if not t or _re.search(r"[A-Za-z0-9]", t):
+        return False
+    if any(w in t for w in _MODERN_BLOCKLIST):
+        return False
+    if not _CLASSICAL_PAIR_PATTERN.search(t):
+        return False
+    return any(m in t for m in _CLASSICAL_NARRATIVE_MARKERS)
+
+
 def recommend_style(topic: str) -> tuple[str, list[str]]:
-    """基于主题关键词推荐风格 ID + 备选。"""
+    """基于主题分类推荐风格 ID + 备选（v0.3.2 加权信号分类器）。"""
+    scores, _ = _classify_signals(topic)
+    if scores:
+        top = max(
+            scores,
+            key=lambda s: (scores[s], -_STYLE_TIEBREAK.index(s) if s in _STYLE_TIEBREAK else 99),
+        )
+        alternates = [top] + [s for s in _STYLE_TIEBREAK if s != top]
+        return top, alternates
+
+    # 名单/关键词覆盖不到，但句式是古典双人物叙事 → 仍判为连环画
+    if _looks_like_classical_story(topic):
+        return "chinese_lianhuanhua_classic", list(
+            RECOMMEND_MATRIX["历史/典故/国学/古籍/古典"]
+        )
+
+    # 分类器全落空 → 回退到旧的类型词匹配（兼容 "历史故事" 这类元描述输入）
     for kw, styles in RECOMMEND_MATRIX.items():
         if any(k in topic for k in kw.split("/")):
             return styles[0], list(styles)
@@ -505,16 +950,36 @@ RECOMMEND_TEMPLATE_MATRIX: dict[str, tuple[str, ...]] = {
     "科学/物理/化学/生物/医学": ("e", "c", "a"),
     "文学/人物/哲学/文化": ("c", "e", "a"),
     "古风/东方/意境/禅意": ("c", "e", "a"),
+    # v0.3.2 补齐：原先这两类只在风格矩阵里有，模板矩阵缺失 → 掉进兜底拿到 e
+    "武侠/江湖/侠义": ("c", "e", "a"),
+    "宏大/史诗/战争/重大事件": ("c", "e", "a"),
     "通用/公众号": ("e", "c", "a"),
 }
 
 
 def recommend_template(topic: str) -> tuple[str, list[str]]:
-    """基于主题关键词推荐排版模板 ID + 备选。"""
-    for kw, templates in RECOMMEND_TEMPLATE_MATRIX.items():
-        if any(k in topic for k in kw.split("/")):
-            return templates[0], list(templates)
-    return RECOMMEND_TEMPLATE_MATRIX["通用/公众号"][0], list(RECOMMEND_TEMPLATE_MATRIX["通用/公众号"])
+    """基于主题推荐排版模板 ID + 备选（v0.3.2：跟随风格派生 + a 场景信号）。"""
+    # 1) 情感/旅行/生活 → a（撕纸手账）
+    if any(k in (topic or "") for k in _TEMPLATE_A_SIGNALS):
+        return "a", ["a", "e", "c"]
+
+    # 2) 跟随推荐风格：中国画三风格 → c（朱砂红 + 印章），其余 → e（深蓝灰）
+    style_id, _ = recommend_style(topic)
+    primary = _STYLE_TEMPLATE.get(style_id, "e")
+
+    # 3) 分类器全落空时回退到旧的类型词匹配
+    if not _classify_signals(topic)[0]:
+        for kw, templates in RECOMMEND_TEMPLATE_MATRIX.items():
+            if any(k in topic for k in kw.split("/")):
+                return templates[0], list(templates)
+        return RECOMMEND_TEMPLATE_MATRIX["通用/公众号"][0], list(
+            RECOMMEND_TEMPLATE_MATRIX["通用/公众号"]
+        )
+
+    order = ["c", "e", "a"] if primary == "c" else ["e", "c", "a"]
+    if order[0] != primary:
+        order = [primary] + [t for t in order if t != primary]
+    return order[0], order
 
 
 def recommend_style_rationale(topic: str) -> str:

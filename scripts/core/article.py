@@ -361,23 +361,83 @@ def _extract_highlight(caption: str, body: str, page_no: int) -> str:
 
 
 def _extract_quote(body: str) -> str:
-    """从 body 提取一句「金句/数据」作为数据卡内容（≤30 字）。"""
-    body = body or ""
+    """从 body 提取完整章节要点（不再截断！v0.2.7.5）。
+
+    优先级：
+      1. 引号内容（最高优先，因为是直接引述）
+      2. 第一句（保留完整，不截断）
+      3. 第一段（如果第一句为空）
+
+    返回完整文本，确保读者能看完整段。
+    """
+    body = (body or "").strip()
+    if not body:
+        return ""
     # 1. 引号内容
-    m = re.search(r"「([^」]{2,30})」", body)
+    m = re.search(r"「([^」]{2,200})」", body)
     if m:
-        return m.group(1)
-    # 2. 数据句（含率/比例/达/分之）
-    m = re.search(r"([^。，]{4,30}?(?:率|比例|分之|达|占)[^。，]{0,15})", body)
-    if m:
-        quote = m.group(1).strip()
-        if len(quote) <= 30:
-            return quote
-    # 3. 第一句
-    first = body.split("。")[0].strip()
-    if len(first) > 30:
-        first = first[:30] + "..."
-    return first
+        return m.group(1).strip()
+    # 2. 第一句完整 (到第一个 。)
+    first_sentence = body.split("。")[0].strip()
+    if first_sentence:
+        return first_sentence + "。"  # 补回句号
+    # 3. 整个 body 第一段（到换行）
+    return body.split("\n")[0].strip()
+
+
+# === v0.2.7.4: body 文字关键词标记 ===
+# 自动识别关键人名/年份/地点/事件，用朱砂色+加粗包裹
+_HIGHLIGHT_KEYWORDS: list[str] = [
+    # 人名（按长度倒序，避免短词先匹配）
+    "郭子仪", "药葛罗", "仆固怀恩", "郭令公",
+    "安禄山", "史思明", "唐肃宗", "唐代宗",
+    "李光弼", "李豫", "李俶",
+    # 民族/政权
+    "回纥", "吐蕃", "唐帝国", "唐朝", "朝廷",
+    # 地点
+    "长安", "渭水", "邺城", "范阳", "灵武", "洛阳",
+    # 关键事件
+    "安史之乱", "永泰元年", "广德元年",
+    # 关键概念
+    "兄弟盟", "单骑闯营", "翻身下马",
+]
+
+
+def _highlight_keywords(text: str, extra_keywords: list[str] | None = None) -> str:
+    """v0.2.7.4: 把 body 里的关键人名/年份/事件用朱砂红+加粗包裹。
+
+    使用占位符 + 二次替换避免关键词互相嵌套冲突。
+
+    v0.2.9: 支持 per-page extra_keywords(StoryPage.keywords),与全局 _HIGHLIGHT_KEYWORDS 合并匹配。
+    """
+    if not text:
+        return text
+    escaped = _esc(text)
+    # 用占位符避免 `<span>...</span>` 内嵌 `<span>`
+    placeholders: list[tuple[str, str]] = []
+
+    def wrap(kw: str) -> str:
+        ph = f"\x00P{len(placeholders)}\x00"
+        replacement = (
+            f'<span style="color:#9b2332;font-weight:600;">{kw}</span>'
+        )
+        placeholders.append((ph, replacement))
+        return ph
+
+    # 合并关键词(per-page 优先,放前面避免被全局短词抢占)
+    all_keywords = list(extra_keywords or []) + list(_HIGHLIGHT_KEYWORDS)
+
+    # 按长度倒序匹配（避免短词抢占长词子串）
+    matched_text = escaped
+    for kw in sorted(set(all_keywords), key=len, reverse=True):
+        if kw and kw in matched_text:
+            # 找到所有出现的位置，用占位符替换
+            ph = wrap(kw)
+            matched_text = matched_text.replace(kw, ph)
+    # 把占位符替换成实际 span
+    for ph, replacement in placeholders:
+        matched_text = matched_text.replace(ph, replacement)
+    return matched_text
 
 
 def render_template_c(inp: ArticleInput) -> str:
@@ -401,135 +461,124 @@ def render_template_c(inp: ArticleInput) -> str:
     summary = sb.summary or ""
     postscript = sb.postscript or ""
 
-    # 外层：手机框 + 米色羊皮纸背景
+    # 外层：手机框 + 米色羊皮纸背景 (v0.2.7.2 WeChat-safe — 去 box-shadow/border-radius)
     out.append(
-        '<div style="background:#eee8da;padding:24px 0;">'
-        '<div style="max-width:420px;margin:0 auto;background:#fff;'
-        'box-shadow:0 4px 20px rgba(0,0,0,.15);border-radius:8px;'
+        '<section style="background-color:#eee8da;padding:20px 0;">'
+        '<section style="max-width:420px;margin:0 auto;background-color:#ffffff;'
         'overflow:hidden;padding:0;">'
     )
 
-    # === 开篇 ===
-    # 1. 卷首朱砂题词（v2: 朱砂红而非灰）
+    # === 开篇 (v0.2.8.0: 改名"本篇要旨"+ sz1 尺寸 + 文末出处) ===
+    # 1. 本篇要旨 label (11px 朱砂小标)
     out.append(
-        f'<p style="font-size:13px;color:#9b2332;letter-spacing:3px;'
-        f'text-align:center;margin:32px 20px 20px 20px;font-weight:600;">'
-        f'　{_esc(preface)}　</p>'
+        f'<p style="text-align:center;font-size:11px;color:#9b2332;'
+        f'letter-spacing:6px;margin:32px 20px 6px 20px;font-weight:600;">'
+        f'·  本 篇 要 旨  ·</p>'
     )
-    # 2. 大标题 h1（v2: 32px）
-    out.append(
-        f'<h1 style="text-align:center;font-size:32px;color:#1a1a1a;'
-        f'margin:0 20px 12px 20px;font-weight:700;letter-spacing:6px;'
-        f'line-height:1.4;">{_esc(title)}</h1>'
-    )
-    # 3. 副标题（v2: 朱砂装饰短线）
-    if subtitle:
+    # 2. 题眼 quote (18px 朱砂大字, hero quote)
+    if preface:
         out.append(
-            '<div style="text-align:center;margin:12px 20px 24px 20px;">'
-            '<span style="display:inline-block;width:24px;height:1px;'
-            'background:#9b2332;vertical-align:middle;"></span>'
-            f'<span style="font-size:13px;color:#9b2332;letter-spacing:2px;'
-            f'margin:0 12px;font-weight:500;">{_esc(subtitle)}</span>'
-            '<span style="display:inline-block;width:24px;height:1px;'
-            'background:#9b2332;vertical-align:middle;"></span>'
-            '</div>'
+            f'<p style="text-align:center;font-size:18px;color:#9b2332;'
+            f'margin:0 20px 16px 20px;font-weight:600;letter-spacing:2px;'
+            f'line-height:24px;font-family:STKaiti,KaiTi,楷体,serif;">'
+            f'{_esc(preface)}</p>'
         )
-    else:
-        out.append('<div style="margin-bottom:24px;"></div>')
 
-    # 4. 导语（v2: 加粗 18px 1.9 行高）
+    # 3. 导语 (summary) — 首字下沉 + 紧凑 epigraph
     if summary:
+        first_char = summary[0] if summary else ''
+        rest = summary[1:] if summary else ''
+        # 首字下沉：朱砂大字 28px，浮动 left
         out.append(
-            f'<p style="font-size:18px;color:#222;margin:0 20px 24px 20px;'
-            f'text-indent:2em;font-weight:600;line-height:1.9;">'
-            f'{_esc(summary)}</p>'
+            f'<p style="font-size:15px;color:#333;margin:16px 20px 20px 20px;'
+            f'text-align:justify;font-weight:500;line-height:24px;">'
+            f'<span style="float:left;font-size:30px;color:#9b2332;'
+            f'font-weight:700;line-height:24px;padding:2px 6px 0 0;">'
+            f'{_esc(first_char)}</span>{_esc(rest)}</p>'
         )
+        # epigraph 作为独立 quote block，紧凑
+        if epigraph:
+            out.append(
+                f'<p style="font-size:13px;color:#9b2332;margin:8px 24px 24px 24px;'
+                f'font-style:italic;letter-spacing:1px;line-height:24px;'
+                f'border-left:2px solid #9b2332;padding-left:10px;">'
+                f'{_esc(epigraph)}</p>'
+            )
 
-    # 5. 题记（v2: 朱砂竖线 + 浅色底）
-    if epigraph:
-        out.append(
-            f'<div style="margin:0 20px 32px 20px;padding:14px 18px;'
-            f'background:rgba(155,35,50,0.06);border-left:3px solid #9b2332;">'
-            f'<p style="font-size:15px;color:#9b2332;margin:0;'
-            f'letter-spacing:2px;font-style:italic;line-height:1.7;'
-            f'font-family:STKaiti,KaiTi,楷体,serif;">'
-            f'　{_esc(epigraph)}　</p>'
-            '</div>'
-        )
-
-    # 6. 朱砂红双线分隔
+    # 4. 朱砂红双线分隔
     out.append(
-        '<div style="margin:0 20px 8px 20px;border-top:2px solid #9b2332;'
-        'border-bottom:1px solid #9b2332;height:4px;"></div>'
+        '<section style="margin:0 20px 8px 20px;padding:8px 0;">'
+        '<p style="border-top:1px solid #9b2332;margin:0;"></p>'
+        '<p style="border-top:1px solid #9b2332;margin:2px 0 0 0;"></p>'
+        '</section>'
     )
 
-    # === 正文 ===
+    # === 正文 (v0.2.7.3 高级感：章节号缩成左标签 + h2 居中大字 + 正文 line-height 1.9) ===
     for i, page in enumerate(sb.pages):
         body = page.body or page.narration or ""
         section_num = _cn_section(page.page)
-        highlight = _extract_highlight(page.caption, body, page.page)
         quote = _extract_quote(body)
 
-        # 章节大字 highlight（v2 新增：朱砂 80px 大字标识）
-        if highlight and highlight != f"第{page.page:02d}章":
-            out.append(
-                f'<div style="text-align:center;margin:48px 20px 8px 20px;">'
-                f'<span style="display:inline-block;font-size:80px;'
-                f'color:#9b2332;font-weight:bold;letter-spacing:6px;'
-                f'font-family:STSong,SimSun,宋体,serif;line-height:1;">'
-                f'{_esc(highlight)}</span>'
-                f'</div>'
-                f'<p style="text-align:center;font-size:12px;color:#9b2332;'
-                f'letter-spacing:8px;margin:0 20px 4px 20px;font-weight:600;">'
-                f'第 {section_num} 章</p>'
-            )
-        else:
-            out.append(
-                f'<p style="text-align:center;font-size:12px;color:#9b2332;'
-                f'letter-spacing:8px;margin:48px 20px 8px 20px;font-weight:600;">'
-                f'第 {section_num} 章</p>'
-            )
+        # 章节号：朱砂小标 + h2 大字 紧凑布局
+        out.append(
+            f'<p style="font-size:12px;color:#9b2332;'
+            f'letter-spacing:3px;margin:48px 20px 4px 20px;font-weight:600;">'
+            f'第 {section_num} 章</p>'
+        )
 
-        # h2 章节题（v2: 颜色 #1a1a1a 黑）
+        # h2 章节题 (无 border-bottom，改用下方分隔线段)
         if page.caption:
             out.append(
                 f'<h2 style="font-size:20px;color:#1a1a1a;'
-                f'border-bottom:2px solid #9b2332;padding-bottom:8px;'
-                f'margin:16px 20px 18px 20px;font-weight:700;'
-                f'font-family:STSong,SimSun,宋体,serif;line-height:1.5;">'
+                f'margin:0 20px 6px 20px;font-weight:700;letter-spacing:1px;'
+                f'line-height:24px;">'
                 f'{_esc(page.caption)}</h2>'
             )
+            # h2 下方短朱砂线
+            out.append(
+                f'<p style="margin:0 20px 20px 20px;">'
+                f'<span style="display:inline-block;width:24px;height:2px;'
+                f'background-color:#9b2332;"></span></p>'
+            )
 
-        # 图
+        # 图 (去掉 border-radius，WeChat-safe)
         if i < len(inp.page_image_urls):
             url = inp.page_image_urls[i]
             out.append(
-                f'<p style="text-align:center;margin:0 20px 16px 20px;">'
+                f'<p style="text-align:center;margin:0 20px 20px 20px;">'
                 f'<img src="{_esc(url)}" '
-                f'style="max-width:100%;border-radius:4px;" '
+                f'style="max-width:100%;" '
                 f'data-page="{page.page}" /></p>'
             )
 
-        # 正文（v2: line-height 2.0）
+        # 正文 (line-height 1.9, 两端对齐) — v0.2.7.4 关键词高亮 + v0.2.9 per-page keywords
         if body:
+            page_kws = getattr(page, 'keywords', []) or []
             out.append(
-                f'<p style="font-size:15px;line-height:2.0;color:#2a2a2a;'
-                f'margin:0 20px 20px 20px;padding:0 4px;'
+                f'<p style="font-size:15px;line-height:24px;color:#1a1a1a;'
+                f'margin:0 20px 16px 20px;'
                 f'text-align:justify;text-indent:2em;">'
-                f'{_esc(body)}</p>'
+                f'{_highlight_keywords(body, page_kws)}</p>'
             )
 
-        # 数据卡 / 引文卡（v2 新增）
+        # 数据卡 / 引文卡 (v0.2.7.9: "定格瞬间" 字号加大 + 浅朱砂背景色块)
         if quote and len(quote) >= 4:
+            # 内容：body 第一句完整（带关键词朱砂高亮）
+            first_full = body.split("。")[0].strip() if body else quote.strip()
+            page_kws = getattr(page, 'keywords', []) or []
+            content_html = _highlight_keywords(first_full, page_kws) if first_full else _esc(quote)
+
             out.append(
-                f'<div style="margin:8px 20px 32px 20px;padding:14px 18px;'
-                f'background:#f5f0e8;border-left:3px solid #9b2332;">'
-                f'<p style="font-size:13px;color:#9b2332;margin:0 0 4px 0;'
-                f'letter-spacing:2px;font-weight:600;">关键节点</p>'
-                f'<p style="font-size:14px;color:#1a1a1a;margin:0;'
-                f'line-height:1.7;font-weight:500;">'
-                f'　{_esc(quote)}　</p>'
-                '</div>'
+                f'<p style="font-size:11px;color:#9b2332;'
+                f'margin:16px 20px 4px 20px;letter-spacing:3px;font-weight:600;">'
+                f'·  定 格 瞬 间  ·</p>'
+                f'<p style="font-size:18px;color:#1a1a1a;'
+                f'margin:0 20px 20px 20px;padding:14px 16px;'
+                f'background-color:rgba(155, 35, 50, 0.07);'
+                f'border-left:3px solid #9b2332;line-height:24px;'
+                f'font-weight:500;'
+                f'font-family:STKaiti,KaiTi,楷体,serif;">'
+                f'　{content_html}　</p>'
             )
 
         # dialogue
@@ -542,47 +591,57 @@ def render_template_c(inp: ArticleInput) -> str:
                 f'「{_esc(page.dialogue)}」</p>'
             )
 
-    # === 结尾 ===
-    # 朱砂印章（v2: 64x64 加大）
-    out.append(
-        '<div style="margin:56px 20px 20px 20px;border-top:1px solid #9b2332;'
-        'border-bottom:2px solid #9b2332;padding:24px 0;text-align:center;">'
-        '<div style="display:inline-block;width:64px;height:64px;background:#9b2332;'
-        'color:white;font-family:STKaiti,KaiTi,楷体,serif;font-size:30px;'
-        'font-weight:bold;line-height:64px;text-align:center;'
-        'box-shadow:0 0 12px rgba(155,35,50,0.5);letter-spacing:4px;">完</div>'
-        '</div>'
-    )
-
-    # 启示金句（v2 新增：朱砂渐变背景卡）
+    # === 结尾 (v0.2.7.1: 删"完"印章 + 现代启示做大做强) ===
+    # 现代启示作为"金句卡" (v0.2.7.4: 更大字 + 强 padding + 大留白收束 + 头部标识强化)
     if postscript:
-        first_sentence = postscript.split('。')[0] if '。' in postscript else postscript[:30]
+        # 1) 上方细线分隔 + "本篇收束" 标
         out.append(
-            '<div style="margin:24px 20px 16px 20px;padding:20px;'
-            'background:linear-gradient(135deg,#9b2332 0%,#c4644a 100%);'
-            'border-radius:4px;color:white;text-align:center;">'
-            '<p style="font-size:11px;letter-spacing:3px;margin:0 0 8px 0;'
-            'opacity:0.85;">现 代 启 示</p>'
-            f'<p style="font-size:17px;margin:0;line-height:1.7;font-weight:500;">'
-            f'　{_esc(first_sentence)}　</p>'
-            '</div>'
+            '<p style="margin:48px 20px 0 20px;">'
+            '<span style="display:inline-block;width:100%;height:1px;'
+            'background-color:#9b2332;"></span></p>'
+        )
+        out.append(
+            '<p style="text-align:center;font-size:11px;color:#9b2332;'
+            'margin:8px 20px 14px 20px;letter-spacing:6px;font-weight:600;">'
+            '·  本 篇 收 束  ·</p>'
+        )
+        # 2) 主金句块 — 大字、强 padding、双线装饰
+        out.append(
+            '<section style="margin:0 20px 14px 20px;padding:40px 24px;'
+            'background-color:#9b2332;color:#ffffff;text-align:center;">'
+            '<p style="font-size:11px;color:#ffffff;letter-spacing:8px;'
+            'margin:0 0 18px 0;font-weight:600;">·  现 代 启 示  ·</p>'
+            f'<p style="font-size:19px;color:#ffffff;margin:0;'
+            f'line-height:24px;font-weight:500;letter-spacing:1px;">'
+            f'　{_esc(postscript)}　</p>'
+            '</section>'
+        )
+        # 3) 收束横线 + 结尾"· · ·"
+        out.append(
+            '<p style="margin:0 20px 0 20px;">'
+            '<span style="display:inline-block;width:100%;height:1px;'
+            'background-color:#9b2332;"></span></p>'
+        )
+        out.append(
+            '<p style="margin:24px 20px 32px 20px;text-align:center;'
+            'color:#9b2332;letter-spacing:16px;font-size:14px;font-weight:600;">'
+            '· · ·</p>'
         )
 
-    # 后记
-    if postscript:
+    # v0.2.7: 删除"后记"块（与现代启示内容重复，冗余）
+
+    # v0.2.8.0: 文末出处脚注（用户选定方案 B）
+    if subtitle:
         out.append(
-            '<div style="margin:8px 20px 32px 20px;padding:18px;'
-            'background:rgba(155,35,50,0.04);border-left:3px solid #9b2332;">'
-            '<p style="font-size:13px;color:#9b2332;font-weight:bold;'
-            'letter-spacing:2px;margin:0 0 10px 0;'
-            'font-family:STKaiti,KaiTi,楷体,serif;">后　记</p>'
-            f'<p style="font-size:14px;line-height:2.0;color:#2a2a2a;'
-            f'margin:0;text-indent:2em;text-align:justify;">'
-            f'{_esc(postscript)}</p>'
-            '</div>'
+            f'<p style="margin:24px 20px 24px 20px;text-align:center;">'
+            f'<span style="display:inline-block;width:24px;height:1px;background-color:#ccc;"></span></p>'
+            f'<p style="margin:0 20px 32px 20px;text-align:center;'
+            f'font-size:10px;color:#999;letter-spacing:1px;font-weight:400;">'
+            f'本 文 史 料 依 据：基 于 《 旧 唐 书 》 与 回 纥 外 交 档 案 考 略</p>'
         )
 
-    out.append('</div></div>')
+    # v0.2.7.2: 关闭 WeChat-safe 外层
+    out.append('</section></div>')
     out.append('</section>')
     return "\n".join(out)
 

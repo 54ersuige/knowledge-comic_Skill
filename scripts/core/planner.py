@@ -43,6 +43,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PAGES = 8
 
+# v0.3.2：LLM 调用上限。分镜生成属于长输出，给 180s；重试 1 次（客户端层），
+# 再失败就由 plan_storyboard 捕获并降级到 mock_storyboard，不会挂死对话。
+LLM_TIMEOUT = 180.0
+LLM_MAX_RETRIES = 1
+
 
 def recommend_pages(num_bullets: int) -> int:
     """v0.2.4 主题分级推荐页数。
@@ -76,6 +81,7 @@ class StoryPage:
     body: str = ""                    # 长段落正文（中国故事/典故场景）
     key_visual: str = ""
     highlight: str = ""               # 章节大字 4-8 字（跨章唯一）
+    keywords: list[str] = field(default_factory=list)  # v0.2.9: body 关键词高亮(人名/地名/朝代/事件)
 
 
 @dataclass
@@ -95,6 +101,10 @@ class Storyboard:
     # === 推荐模板（v0.2.4 fix：让 step_render_article(template_id=None) 自动用对模板）===
     recommended_template: str = ""    # c / e / a（planner 写；render/publish step 读）
 
+    # === v0.2.5: 人物故事专用 — 角色卡列表 ===
+    characters: list[dict] = field(default_factory=list)
+    # 格式: [{"name": "...", "role": "...", "visual_signature": "..."}]
+
     def to_dict(self) -> dict:
         return {
             "topic": self.topic,
@@ -106,6 +116,7 @@ class Storyboard:
             "epigraph": self.epigraph,
             "postscript": self.postscript,
             "recommended_template": self.recommended_template,
+            "characters": self.characters,
             "pages": [asdict(p) for p in self.pages],
         }
 
@@ -185,6 +196,15 @@ PLANNER_SYSTEM_PROMPT = """你是知识漫画分镜师。
    - ≤ 1 张**特写/close-up**（仅用于最戏剧时刻 + 必须有故事动作在脸上，如血溅脸/怒目圆睁）
    - 其余用**中景偏宽/three-quarter shot**（人物在画面 1/2，周围是环境）
 
+### ⚠️ 连环画多人物铁律（v0.2.9 历史典故/古典/武侠/江湖专用）
+
+戴敦邦/顾炳鑫/贺友直派连环画核心是**单页多人物 + 信息密集 + 满画幅叙事**。每页必须：
+- **主人物 ≥ 3 个**（主角 + 配角 + 围观/路人 + 1-2 个远景人物活动）
+- **满画幅构图**：禁止大面积空白/留白作主体（连环画风格不像单幅国画人物画，连环画要填满叙事）
+- **次要人物活动**：背景里要有 2-3 个在做具体事的角色（送别邻人 / 商队 / 宫女 / 侍卫 / 牧羊人 / 孩童玩耍 / 远处商旅）
+- **多道具叙事**：每个画面至少 2 个具体道具（兵器 / 食物 / 旗帜 / 文书 / 灯 / 行李 / 礼物 / 茶碗）
+- **互动关系**：人物之间要有空间关系和视线互动（不是各站各的）
+
 ❌ 错误示例（"大头贴"——只能看到脸，看不到故事）：
 - "He is shown in profile, looking out through a shattered window." → 仅 1 个人脸 + 1 扇窗，没故事
 - "He stands in the center of a vast, empty, abstract space. From his chest, seven large, translucent, ethereal rings are expanding outward." → 角色占满画面，背景全黑，看不到场景
@@ -198,6 +218,57 @@ PLANNER_SYSTEM_PROMPT = """你是知识漫画分镜师。
 - ✅ 场景描述必须包含**至少 2 个可识别环境元素**（城楼 + 天空 + 战旗 / 桌子 + 竹简 + 砚台 + 烛台 / 街道 + 砖石 + 倒塌墙垣）
 - ❌ 禁止"X is shown in..."这种以人为特征的身份化开头的描述
 - ❌ 禁止"vast, empty, abstract space"这种无环境的抽象背景
+
+### ⚠️ 角色视觉签名锁定铁律（v0.3.0 新增，2026-09-24）
+
+**根因**：如果主角跨页用了不同视觉签名（如 p1 棕色袍官员、p4 白色道袍、p6 明显女子），
+读者会认为是"换了人"或"穿越了"，破坏故事连续性。
+
+**铁律**：
+- 同一主角在**所有页面**的核心视觉签名必须保持一致：
+  - **服饰**：袍色 + 幞头/官帽 + 玉带（官员）/ 盔甲 + 战盔 + 红缨（战时）
+  - **面部**：年龄 + 须型（蓄短须/无须/长须）+ 眉形（直眉/剑眉/柳叶眉）+ 妆发（male 直眉玉簪/female 柳叶眉步摇）
+  - **身体**：身高 + 体型（lean/medium/stout）
+- 战时换盔甲 OK，但要明确同一人物（如 p2 张巡盔甲武将 + p3 张巡复员官员）
+- ❌ 禁止同一主角不同页发型/妆发/服饰完全不同（特别是从 male 直眉玉簪 变 female 柳叶眉步摇 — 性转）
+
+**v0.3.0 教训**：planner LLM 早期不写 [GENDER:xx] tag + anchor 默认女性化 → 男主角被性转成女子脸。
+现在 planner 必须每页 visual 第二行写 [GENDER:xx] tag（详见 #8 性别标记铁律），build_image_prompt
+会按 gender 自动用对应 anchor（FACE + GENDER_FEMALE 或 FACE + GENDER_MALE）。
+
+### ⚠️ 画面与 caption 严格匹配铁律（v0.3.0 新增，2026-09-24）
+
+**根因**：planner LLM 默认会忽略 caption 内容直接套场景模板，导致视觉与文字脱节
+（如 caption"砍断一根指头"画面只放桌上没动作；caption"36 将尽死"画面只 2 人对峙）。
+
+**铁律**：每页 visual 的 **ACTION** 段必须严格包含 caption 中的核心动作/事件：
+- caption 含"砍断指头" → visual 必须有"刚砍断/裹血布/桌上有刀"
+- caption 含"36 将尽死" → visual 必须有"倒下尸体堆 + 多人战斗"
+- caption 含"城破火光" → visual 必须有"火球/烟柱/城破洞"
+- caption 含"射雀充饥" → visual 必须有"弓 + 飞鸟 + 多人射箭"
+
+**写法规则**：
+- ✅ ACTION 段第一句必须**直接复述 caption 核心动作**
+- ✅ 视觉里必须有 caption 关键词的具象对应物（不是抽象概括）
+- ❌ 禁止视觉只画人物站立/沉思，画面与 caption 无关
+
+### ⚠️ 零文字铁律强化（v0.3.0 升级，2026-09-24）
+
+每次重画都发现画面会出现"可读字符"（袍上花纹被读成篆字、地图被画上汉字、玉佩上刻字）。
+模型默认会给"中国风装饰"加字符，必须**每页都明确禁止**。
+
+**铁律**：每页 visual 末尾必须明确写：
+```
+STRICT NO TEXT — plain fabric robes with NO characters/symbols/inscriptions,
+map shows ONLY abstract terrain (rivers/mountains) without any writing,
+armor is PLAIN unadorned, no characters on blade.
+```
+
+写法：
+- ✅ 每页 visual 末尾写 "STRICT NO TEXT — ..." 强化句
+- ✅ 服饰描述用 "PLAIN unadorned" / "plain fabric" / "simple weave"
+- ✅ 地图描述强调 "abstract terrain WITHOUT text"
+- ❌ 不要写 "decorative patterns" / "calligraphy" / "inscribed" 这种模型会当真画字符的词
 
 ### ⚠️ 零文字铁律（防"画面出字"bug）
 
@@ -221,18 +292,20 @@ visual 字段**严禁**包含以下元素（即使概念正确，模型会把字
 
 1. highlight（章节大字 4-8 字，跨章唯一）
 2. caption（章节题，10-20 字）
-3. body（长段落正文，≥ 80 字，三联/远川式）
-4. key_visual（视觉锚点，跨章保持）
+3. body（长段落正文，**严格 100-150 字**——图为主、文字为脚注。超过 150 字自动砍到 150）
+4. keywords（**v0.2.9 必填**——本页正文里要朱砂红高亮的关键词数组，5-8 个/人名/地名/朝代/事件/年份）
+5. key_visual（视觉锚点，跨章保持）
 
 ## 铁律
 
 1. 每页 visual 只描述画面场景/人物动作/构图，不写对话、不写旁白
 2. 每页 caption 1 行（10-20 字），是场景说明
 3. dialogue/narration 进文章，不要写进 image prompt
-4. body 字段（如果是中国故事/典故/经典解读）：≥ 80 字长段落正文
-5. 第 1 页通常是"开场"，最后一页是"金句结尾"
-6. 结尾 postscript ≤ 80 字 + 含反直觉/反常识
-7. **绝对禁止**写"按照X风格"、"在Y视角下"、"本研究"、"以下内容将"等元叙事或程式化引导语
+4. body 字段（如果是中国故事/典故/经典解读）：**严格 100-150 字**长段落正文（图为主、文字为脚注——不要解释图里已表达的东西，只补画面没说的事：情绪、潜台词、读者没看到的内情）
+5. **keywords 字段必填**（v0.2.9）：5-8 个本页要朱砂红加粗高亮的关键词（人名/地名/朝代/事件/年份）。c 模板会自动渲染 `<span style="color:#9b2332;font-weight:600;">{kw}</span>` 包住这些词
+6. 第 1 页通常是"开场"，最后一页是"金句结尾"
+7. 结尾 postscript ≤ 80 字 + 含反直觉/反常识
+8. **绝对禁止**写"按照X风格"、"在Y视角下"、"本研究"、"以下内容将"等元叙事或程式化引导语
 
 ## v0.2.3 七要素铁律（2026-09-21 升级，漫画画面表达系统化重写）
 
@@ -291,19 +364,56 @@ visual 字段**严禁**包含以下元素（即使概念正确，模型会把字
   "preface": "卷首题词（10-20 字）",
   "epigraph": "题记（30-50 字）",
   "postscript": "后记（30-80 字）",
+  "characters": [    // v0.2.5 人物故事必须填。其它类型可以为空 []
+    {
+      "name": "主角姓名（如「郭子仪」）",
+      "role": "角色身份（主角 / 配角 / 反派 / 路人）",
+      "visual_signature": "中文视觉签名（30-80 字）：精确描述面部/服饰/配饰/气质/年龄/朝代/民族，确保每页跨章跨段稳定不变。例：'唐代老将军, 60-70 岁, 方颌, 丹凤眼, 剑眉, 蓄短须, 戴黑色幞头, 穿朱砂色圆领袍配玉带, 身形清瘦挺拔'"
+    }
+  ],
   "pages": [
     {
       "page": 1,
       "highlight": "1347",
-      "visual": "画面描述（英文 80-150 词，必须按 v0.2.3 七要素结构组织：SUBJECT / ACTION / CAMERA 四件套 / PLACEMENT / DEPTH LAYERS / LIGHTING / MOOD；开头列角色五件套；选 1 个 expression anchor）",
+      "visual": "画面描述（英文 80-150 词，必须按 v0.2.3 七要素结构组织：SUBJECT / ACTION / CAMERA 四件套 / PLACEMENT / DEPTH LAYERS / LIGHTING / MOOD；开头列角色五件套；v0.3.0 第二行写 [GENDER:male|female|mixed] 性别标记；选 1 个 expression anchor）",
       "caption": "场景说明（中文 10-20 字）",
       "dialogue": "对话或空字符串",
       "narration": "旁白或空字符串",
-      "body": "长段落正文（≥ 80 字，三联/远川式）",
+      "body": "长段落正文（**严格 100-150 字**——图为主、文字为脚注）",
+      "keywords": ["关键词1", "关键词2", "关键词3", "关键词4", "关键词5"],
       "key_visual": "视觉锚点"
     }
   ]
 }
+
+### v0.2.5 人物一致性规则（人物故事必读）
+
+**触发条件**：当主题是「人物故事 / 传记 / 历史人物 / 名人 / 武侠 / 江湖 / 古典小说人物」时，必须输出 `characters` 数组（≥1 个主要人物）。
+
+**visual 字段角色描述规则**：
+- ✅ 每页 visual 开头必须**完整重复**该角色在 characters 数组里的视觉签名翻译（不只是"the man"或"Guo Ziyi"）
+- ✅ 多角色场景里每个角色的核心特征都必须出现（避免换脸/换人 bug）
+- ❌ 不要用代词（"he" / "the general" / "the khan"）省略人物身份
+
+**作用**：Mavis 拿到 storyboard 后会先用 characters 跑角色 4 视图参考图（front / 3-4 / side / back），再每页用 i2i 跑，保证 10 页跨章跨段角色稳定。这是 v0.2.5 强约束。
+
+## v0.3.0 性别标记铁律（防"性转"bug，2026-09-24 新增）
+
+**根因**：chinese_lianhuanhua_classic 默认 anchor 把妆发硬写"女性化"（桃花腮+花钿+步摇+柳叶眉），
+如果 visual 描述男性主角（"Zhang Xun, 40yo male general"），anchor 强制桃花腮/步摇 → 模型脸部女性化 + 服饰中性 → 性转成女性。
+
+**铁律**：每页 visual **第二行**（角色描述之后、ACTION 之前）必须明确写出性别标记，格式：
+- `[GENDER:male]` — 单人物性别为男性（最常见于历史典故主角，如张巡/郭子仪/文天祥）
+- `[GENDER:female]` — 单人物性别为女性（如王昭君/杨贵妃/武则天）
+- `[GENDER:mixed]` — 男女混合场景（如"夫妻对坐"、"将军审问叛军女眷"）
+
+**示例**：
+- ✅ "SUBJECT: Zhang Xun, 40yo Tang general... [GENDER:male] ACTION: he grips his sword..."
+- ✅ "SUBJECT: Wang Zhaojun... [GENDER:female] ACTION: she plays the pipa..."
+- ✅ "SUBJECT: Zhang Xun and his wife [GENDER:mixed] ACTION: they examine a map..."
+
+**作用**：build_image_prompt 按 [GENDER:xx] 自动选对应妆发分支（女性桃花腮/步摇 / 男性玉冠/玉簪/剑眉），
+不会因为 anchor 默认女性化导致男性主角被性转。如果漏标记，build_image_prompt 会自动从代词检测，但显式标记更稳。
 """
 
 
@@ -339,7 +449,15 @@ def _call_llm_storyboard(
 
     target_pages = num_pages if num_pages is not None else recommend_pages(len(bullets))
 
-    client = OpenAI(api_key=cfg.llm_api_key, base_url=cfg.llm_base_url)
+    # v0.3.2：OpenAI 客户端加 timeout + max_retries。
+    # 旧实现两个都不带 —— LLM 卡住时会无限期挂死（Mavis 对话里表现为"跑着跑着没动静"，
+    #  无法区分是在跑还是在死）。这里给足出图级等待，但必须有上限。
+    client = OpenAI(
+        api_key=cfg.llm_api_key,
+        base_url=cfg.llm_base_url,
+        timeout=LLM_TIMEOUT,
+        max_retries=LLM_MAX_RETRIES,
+    )
     user_msg = _build_planner_user_msg(topic, bullets, style_id, canon_injection)
 
     # 动态 system prompt：把"输出 6-10 页"换成"输出 {target_pages} 页"
@@ -440,6 +558,7 @@ def _call_llm_storyboard(
         preface=data.get("preface", ""),
         epigraph=data.get("epigraph", ""),
         postscript=data.get("postscript", ""),
+        characters=data.get("characters", []),
     )
 
 
@@ -452,14 +571,24 @@ def mock_storyboard(
     """无 LLM 时的占位 storyboard。角色按主题时代自适应。
 
     num_pages: 显式目标页数（None = 自动按 recommend_pages 推荐）。
-    注意：mock 模式下页数实际由 bullets 数 + 起页 + 结尾页决定，
-    num_pages 仅作 informational 输出（actual LLM 模式下才严格生效）。
+    v0.3.2 修复：原先完全忽略 num_pages（只在 docstring 里说"仅作 informational"），
+    导致 step_plan(num_pages=6) 在降级路径上仍按 bullets 数产出 5 页。
+    现在按 num_pages 补齐/截断。
     """
+    target_pages = num_pages if num_pages is not None else recommend_pages(len(bullets))
+
     pages: list[StoryPage] = []
 
     # 角色锚点（按 style_id 选）
+    # v0.3.2 修复：原先只有 cn_xuanfeng 分支，其余风格（含历史类首选
+    # chinese_lianhuanhua_classic）一律套"戴眼镜现代科学家"，降级后画出来
+    # 是连环画里站着个现代人。改为直接用 prompts 的按风格锚点。
     if style_id == "cn_xuanfeng":
         character = "A Han-Chinese historical person in traditional hanfu robe (crossed collar, wide sleeves, sash belt, hair pinned in classical style with subtle ornaments), serene contemplative expression, age 20-30, rendered with elegant elongated proportions typical of classical Chinese figure painting"
+    elif style_id == "chinese_lianhuanhua_classic":
+        character = "Chinese illustrated figure on rice paper with ink-brush gongbi technique, Han-Chinese historical period costume appropriate to the scene, 3+ principal figures plus 2-3 background attendants, multi-prop full-frame narrative composition, classical Chinese lianhuanhua painted illustration, NOT a photograph, NOT a 3D render"
+    elif style_id == "guochao_manhua":
+        character = "Chinese manhua figure, Han-Chinese historical costume with modern cel-shaded guochao style, flat color blocks with vermilion / ink-blue / jade-green / gold accents, stylized 1:2 head-to-body ratio, NOT a photograph, NOT a 3D render"
     else:
         character = "A small scientist figure with short black hair, round wire-frame glasses, light grey sweater, dark trousers, neutral expression, age 30"
 
@@ -506,6 +635,34 @@ def mock_storyboard(
         key_visual="consistent character anchor",
     ))
 
+    # v0.3.2：按 target_pages 补齐 / 截断，保证用户显式指定的页数在降级路径也生效。
+    if len(pages) > target_pages and target_pages >= 2:
+        # 保留开场 + 结尾金句，中间按需裁剪
+        head, tail = pages[0], pages[-1]
+        mid_budget = target_pages - 2
+        pages = [head] + pages[1:1 + mid_budget] + [tail]
+    elif len(pages) < target_pages:
+        filler_bullets = bullets or [topic]
+        while len(pages) < target_pages:
+            idx = len(pages) - 1
+            bullet_short = filler_bullets[idx % len(filler_bullets)][:30]
+            pages.append(StoryPage(
+                page=len(pages) + 1,
+                visual=(
+                    f"{character}, a secondary moment illustrating {bullet_short}, "
+                    f"clear composition, soft warm palette, "
+                    f"ABSOLUTELY NO TEXT, NO labels, NO arrows-with-words."
+                ),
+                caption=bullet_short,
+                dialogue="",
+                narration="",
+                key_visual="consistent character anchor",
+            ))
+
+    # 重排页码，保证连续
+    for i, p in enumerate(pages, start=1):
+        p.page = i
+
     return Storyboard(
         topic=topic,
         style_id=style_id,
@@ -535,7 +692,10 @@ def plan_storyboard(
     """
     if use_llm:
         try:
-            return _call_llm_storyboard(topic, bullets, style_id, canon_injection)
+            # v0.3.2 修复：原先漏传 num_pages，导致用户显式指定的页数在真 LLM 路径被丢弃
+            return _call_llm_storyboard(
+                topic, bullets, style_id, canon_injection, num_pages=num_pages
+            )
         except RuntimeError as e:
             logger.warning("LLM unavailable (%s), falling back to mock storyboard", e)
             return mock_storyboard(topic, bullets, style_id, num_pages)

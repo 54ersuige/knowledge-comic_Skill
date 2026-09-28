@@ -144,7 +144,6 @@ def create_draft(
 
     # 关键：requests.post(json=) 默认 ensure_ascii=True，公众号后台会把 \uXXXX 字面量当真字符串存。
     # 自己 json.dumps(ensure_ascii=False) + 显式 charset=UTF-8。
-    import json
     raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json; charset=utf-8"}
     r = requests.post(url, params=params, data=raw, headers=headers, timeout=60)
@@ -163,21 +162,6 @@ def create_draft(
         )
 
     return data["media_id"]
-
-
-def _post_json_no_ascii_escape(url: str, params: dict, body: dict, timeout: int = 60) -> dict:
-    """requests.post json= 默认 ensure_ascii=True 会把中文转成 \\uXXXX 字面量，
-    公众号草稿存的是 ASCII 字面字符串（不会反解析），导致整篇文章乱码。
-
-    自己 json.dumps 后用 data= + UTF-8 charset 传，保留原字符。
-    """
-    import json
-    raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    headers = {"Content-Type": "application/json; charset=utf-8"}
-    r = requests.post(url, params=params, data=raw, headers=headers, timeout=timeout)
-    if r.status_code != 200:
-        raise RuntimeError(f"{url} HTTP {r.status_code}: {r.text[:300]}")
-    return r.json()
 
 
 def publish_draft(job_id: str, title: str, content_html: str, image_paths: list[Path]) -> dict:

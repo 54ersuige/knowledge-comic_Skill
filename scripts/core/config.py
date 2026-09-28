@@ -15,10 +15,14 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 # 加载顺序：Skill 自带 .env 优先（如果有），否则尝试项目目录 .env（开发期共享）
 load_dotenv(ROOT / ".env", override=False)
 
-# 项目目录 fallback（让用户在 dev 阶段不用复制 .env）
-_project_env = Path(r"D:/minimax-agent_cn-project/知识漫画微信公众号/.env")
-if _project_env.exists():
-    load_dotenv(_project_env, override=False)
+# 开发期 fallback：让本机开发时不用复制 .env。
+# v0.3.2：改为环境变量驱动，不再硬编码某台机器的绝对路径 ——
+# 换机器后原来这条会静默失效，配置悄悄降级成空值。
+_dev_env = os.environ.get("KNOWLEDGE_COMIC_DEV_ENV", "")
+if _dev_env:
+    _p = Path(_dev_env)
+    if _p.exists():
+        load_dotenv(_p, override=False)
 
 
 @dataclass(frozen=True)

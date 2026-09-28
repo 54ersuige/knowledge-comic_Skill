@@ -1,0 +1,125 @@
+"""v0.3.2 修复回归测试（不烧 API 额度，全部走 mock / 本地）。
+
+跑法(任意目录): python scripts/tests/test_regression_v032.py
+"""
+import json
+import shutil
+import sys
+import tempfile
+from pathlib import Path
+
+# 自解析 skill 根目录（原写法指向文件所在目录，移动后会失效）
+SKILL_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(SKILL_ROOT))
+
+from scripts.core import prompts as P
+from scripts.core.planner import mock_storyboard
+import scripts.run as R
+
+FAIL = []
+
+
+def ck(name, cond, extra=""):
+    print(("  PASS " if cond else "  FAIL "), name, extra)
+    if not cond:
+        FAIL.append(name)
+
+
+print("=== A. 风格/模板分类器 (P0) ===")
+cases = [
+    ("张巡守睢阳", "chinese_lianhuanhua_classic", "c"),
+    ("王昭君出塞", "chinese_lianhuanhua_classic", "c"),
+    ("看石崇与王恺争豪", "chinese_lianhuanhua_classic", "c"),
+    ("岳飞抗金", "chinese_lianhuanhua_classic", "c"),
+    ("郭子仪单骑退回纥", "chinese_lianhuanhua_classic", "c"),
+    ("赤壁之战", "chinese_lianhuanhua_classic", "c"),
+    ("李白", "chinese_lianhuanhua_classic", "c"),
+    ("论语", "chinese_lianhuanhua_classic", "c"),
+    ("峰终定律", "new_yorker", "e"),
+    ("Transformer 注意力机制", "new_yorker", "e"),
+    ("心理学与认知", "new_yorker", "e"),
+    ("量子力学", "new_yorker", "e"),
+    ("商业模式画布", "us_mid_century", "e"),
+    ("品牌设计", "us_mid_century", "e"),
+    ("华为与腾讯的竞争", "new_yorker", "e"),
+    ("iPhone 与安卓对比", "new_yorker", "e"),
+    ("旅行随笔", "new_yorker", "a"),
+    ("情感疗愈", "new_yorker", "a"),
+]
+bad = []
+for t, es, et in cases:
+    got_s = P.recommend_style(t)[0]
+    got_t = P.recommend_template(t)[0]
+    if got_s != es or got_t != et:
+        bad.append((t, got_s, got_t))
+ck("18 组分类全部正确", not bad, str(bad))
+
+print()
+print("=== B. mock storyboard ===")
+for n in [4, 6, 8, 12]:
+    sb = mock_storyboard("测试", ["a", "b", "c"], "chinese_lianhuanhua_classic", num_pages=n)
+    nums = [p.page for p in sb.pages]
+    ck(f"num_pages={n} 严格生效", len(sb.pages) == n and nums == list(range(1, n + 1)),
+       f"(实得 {len(sb.pages)})")
+sb = mock_storyboard("测试", ["a"], "chinese_lianhuanhua_classic", num_pages=8)
+ck("历史风格降级无现代科学家", "scientist" not in sb.pages[0].visual)
+
+print()
+print("=== C. prompt 构造 ===")
+for sid in P.STYLES:
+    d = P.build_image_prompt(sid, "测试场景 [GENDER:male]", gender="auto")
+    ck(f"{sid} 长度<=10000", len(d) <= 10000, f"({len(d)})")
+
+d = P.build_image_prompt("chinese_lianhuanhua_classic", "Wide shot (35mm, low angle, deep focus) 场景")
+ck("cinematic 词已剥离",
+   "35mm" not in d and "low angle" not in d.lower() and "deep focus" not in d.lower())
+
+d2 = P.build_image_prompt("chinese_lianhuanhua_classic", "男性主角 [GENDER:male]", gender="auto")
+d3 = P.build_image_prompt("chinese_lianhuanhua_classic", "女性主角 [GENDER:female]", gender="auto")
+ck("性别分支生效", d2 != d3)
+
+from scripts.core.image_gen import _inject_character_lock  # noqa: E402
+
+locked = _inject_character_lock("张巡率军退敌",
+                                characters=[{"name": "张巡", "visual_signature": "40yo Tang general, square jaw"}])
+ck("角色锁动态派生", "CHARACTER LOCK" in locked and "square jaw" in locked)
+legacy = _inject_character_lock("郭子仪单骑退回纥")
+ck("legacy 兜底仍生效", "CHARACTER LOCK" in legacy)
+none = _inject_character_lock("无名路人走过")
+ck("无角色不注入", none == "无名路人走过")
+
+print()
+print("=== D. 端到端 render / preflight（不烧额度）===")
+tmp = Path(tempfile.mkdtemp())
+sb2, job, wd = R.step_plan(
+    "张巡守睢阳", ["安史之乱", "孤城苦守", "以少胜多"],
+    style_id="chinese_lianhuanhua_classic", template_id="c",
+    num_pages=6, use_llm=False, data_dir=tmp,
+)
+ck("step_plan 产出", len(sb2.pages) == 6, f"(pages={len(sb2.pages)})")
+raw = json.loads((wd / "storyboard.json").read_text(encoding="utf-8"))
+ck("recommended_template 落盘", raw.get("recommended_template") == "c")
+
+(wd / "pages").mkdir(exist_ok=True)
+for i in range(1, 7):
+    (wd / "pages" / f"{i:02d}-page.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 2000)
+
+hp = R.step_render_article(job, "c", data_dir=tmp)
+ck("render 产出 HTML", hp.exists() and hp.stat().st_size > 1000, f"({hp.stat().st_size} bytes)")
+ck("朱砂高亮生效", "#9b2332" in hp.read_text(encoding="utf-8"))
+
+pf = R.step_preflight(job, "c", data_dir=tmp)
+failed_names = [c["name"] for c in pf["checks"] if not c["ok"]]
+ck("preflight 对正常图放行", pf["ok"], str(failed_names) if not pf["ok"] else "")
+
+(wd / "pages" / "03-page.png").write_bytes(b"")
+pf2 = R.step_preflight(job, "c", data_dir=tmp)
+ck("preflight 拦截 0 字节图",
+   (not pf2["ok"]) and any(c["name"] == "image_empty" for c in pf2["checks"]))
+
+shutil.rmtree(tmp, ignore_errors=True)
+
+print()
+print("=" * 46)
+print("FAILED:", FAIL if FAIL else "NONE — 全部通过")
+sys.exit(1 if FAIL else 0)

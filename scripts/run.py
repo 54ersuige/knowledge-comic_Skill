@@ -39,7 +39,7 @@ sys.path.insert(0, str(SKILL_ROOT))
 
 from scripts.core.config import get_config  # noqa: E402
 from scripts.core.planner import plan_storyboard, Storyboard, StoryPage, recommend_pages  # noqa: E402
-from scripts.core.image_gen import generate_pages  # noqa: E402
+from scripts.core.image_gen import generate_pages, generate_character_references  # noqa: E402
 from scripts.core import article as article_mod  # noqa: E402
 from scripts.core import publisher as pub_mod  # noqa: E402
 from scripts.core.prompts import (  # noqa: E402
@@ -57,6 +57,7 @@ def step_plan(
     style_id: str | None = None,
     template_id: str | None = None,
     num_pages: int | None = None,
+    characters: list[dict] | None = None,
     use_llm: bool = True,
     data_dir: Path | None = None,
 ) -> tuple[Storyboard, str, Path]:
@@ -68,6 +69,10 @@ def step_plan(
         style_id: 风格 ID（None=自动推荐）
         template_id: 排版 ID（None=自动推荐）
         num_pages: 显式页数（None=按 recommend_pages 自动：≤3 bullets=8 / 4-6=10 / ≥7=12）
+        characters: 人物列表（v0.2.5 人物故事专用；None=单角色锚点）。
+                  格式: [{"name": "郭子仪", "role": "主角",
+                         "visual_signature": "70+ 老年将军, 方颌 丹凤眼 剑眉, 蓄须, 唐代圆领袍+幞头"},
+                        {"name": "药葛罗", "role": "回纥可汗", ...}, ...]
         use_llm: 是否调 LLM（False=mock）
         data_dir: 数据目录
 
@@ -95,6 +100,18 @@ def step_plan(
 
     sb = plan_storyboard(topic, bullets, style_id, use_llm=use_llm, num_pages=num_pages)
 
+    # v0.2.5/0.2.6: 人物一致性 — characters 列表挂到 storyboard
+    if characters:
+        sb.characters = characters
+    elif sb.characters:
+        # v0.2.6: planner LLM 已经提取了 characters（话题是人物故事）
+        characters = sb.characters
+        print(f"[auto-characters] LLM 自动提取 {len(characters)} 个角色")
+    elif _is_character_story(topic):
+        # v0.2.6: 强制提示 — topic 看起来是人物故事但 LLM 没提取到
+        print(f"[auto-characters] WARNING: topic 看起来是人物故事，但 planner 没提取 characters。"
+              f"建议手动传入 step_plan(..., characters=[...]) 启用 i2i 人物一致性")
+
     job_id = f"kc_{int(time.time())}"
     work_dir = work_root / job_id
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -102,11 +119,13 @@ def step_plan(
     # 把推荐 template 写到 storyboard.json 里（便于后续 render 步用）
     sb_dict = sb.to_dict()
     sb_dict["recommended_template"] = template_id
+    if characters:
+        sb_dict["characters"] = characters
     (work_dir / "storyboard.json").write_text(
         json.dumps(sb_dict, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    print(f"[plan] job_id={job_id}  style={style_id}  template={template_id}  pages={len(sb.pages)}")
+    print(f"[plan] job_id={job_id}  style={style_id}  template={template_id}  pages={len(sb.pages)}  characters={len(characters or [])}")
     return sb, job_id, work_dir
 
 
@@ -114,12 +133,14 @@ def step_gen_images(
     job_id: str,
     data_dir: Path | None = None,
     regenerate_pages: list[int] | None = None,
+    auto_char_refs: bool = True,
 ) -> list[Path]:
     """Step 2: 从 storyboard.json 跑图 → PNG 列表
 
     Args:
         job_id: job id
         regenerate_pages: 重画的页码列表（用户审核后给出）
+        auto_char_refs: v0.2.5 人物故事自动跑角色参考图 + 用 i2i
     Returns:
         图片 Path 列表（按页码排序）
 
@@ -133,6 +154,16 @@ def step_gen_images(
     work_dir = work_root / job_id
     sb_path = work_dir / "storyboard.json"
     sb = _load_storyboard(sb_path)
+
+    # v0.2.5: 人物故事自动跑角色参考图
+    character_refs = None
+    if auto_char_refs and sb.characters:
+        print(f"[gen] 先跑 {len(sb.characters)} 个角色参考图 (i2i 模式)")
+        character_refs = generate_character_references(
+            characters=sb.characters,
+            style_id=sb.style_id,
+            job_id=job_id,
+        )
 
     if regenerate_pages:
         pages_to_gen = [p for p in sb.pages if p.page in regenerate_pages]
@@ -150,8 +181,9 @@ def step_gen_images(
             preface=sb.preface,
             epigraph=sb.epigraph,
             postscript=sb.postscript,
+            characters=sb.characters,
         )
-        new_paths = generate_pages(rerender_sb, job_id)
+        new_paths = generate_pages(rerender_sb, job_id, character_refs=character_refs)
         # 替换原路径
         existing = {int(p.stem.split("-")[0]): i for i, p in enumerate(_current_images(work_dir))}
         all_paths = _current_images(work_dir)
@@ -160,11 +192,29 @@ def step_gen_images(
             if page_no in existing:
                 all_paths[existing[page_no]] = new_path
         print(f"[gen] 重画 {len(new_paths)} 页,共 {len(all_paths)} 张")
+        _run_alignment_check(sb_path)
         return all_paths
     else:
-        paths = generate_pages(sb, job_id)
+        paths = generate_pages(sb, job_id, character_refs=character_refs)
         print(f"[gen] 生成 {len(paths)} 张")
+        _run_alignment_check(sb_path)
         return paths
+
+
+def _run_alignment_check(sb_path: Path) -> None:
+    """v0.2.6: 自动跑视觉文字对齐审查 (scripts/check_alignment.py)。
+    输出 HIGH/MEDIUM 风险的页号，让 Mavis 知道哪些页需要复审。
+    """
+    try:
+        from scripts.check_alignment import check_storyboard, print_report
+        report = check_storyboard(sb_path)
+        if report["high_risk_pages"] or report["medium_risk_pages"]:
+            print(f"\n[alignment] HIGH: {report['high_risk_pages']}  MEDIUM: {report['medium_risk_pages']}", flush=True)
+            print_report(report)
+        else:
+            print(f"\n[alignment] OK ({report['ok_count']}/{report['total_pages']} 页通过)", flush=True)
+    except Exception as e:
+        print(f"[alignment] check failed: {e}", flush=True)
 
 
 def step_render_article(
@@ -214,15 +264,22 @@ def step_publish_draft(
     image_paths: list[Path] | None = None,
     data_dir: Path | None = None,
     dry_run: bool = False,
+    thumb_page: int = 1,
 ) -> dict:
     """Step 4: 上传图片 + 创建草稿
 
     Args:
         job_id: job id
         template_id: 模板 ID
+        image_paths: 图片路径列表
+        data_dir: 数据根目录
         dry_run: True = 不实际发布,只生成 publish html
+        thumb_page: v0.3.1 新增 - 封面图选第几张(1-based)。默认 1 = 第一张当封面。
+                   公众号封面视觉冲击通常需要"人物主体 + 强动作",不一定等于第一张。
+                   例如 p1 是开篇引子但人物占比小,做封面弱,可改 thumb_page=2 选 p2。
     Returns:
-        {"draft_media_id": "...", "uploaded_count": N, "work_dir": "..."}
+        {"draft_media_id": "...", "uploaded_count": N, "work_dir": "...",
+         "thumb_media_id": "...", "thumb_page": N}
 
     Mavis 在对话里：
       1. 调本函数拿到 draft_media_id
@@ -240,7 +297,7 @@ def step_publish_draft(
         image_paths = sorted((work_dir / "pages").glob("*.png"))
 
     if dry_run:
-        print(f"[publish:DRY-RUN] job={job_id}  template={template_id}  pages={len(image_paths)}")
+        print(f"[publish:DRY-RUN] job={job_id}  template={template_id}  pages={len(image_paths)}  thumb_page={thumb_page}")
         return {"dry_run": True, "job_id": job_id, "work_dir": str(work_dir)}
 
     # 上传图片到公众号素材库
@@ -253,6 +310,14 @@ def step_publish_draft(
         wechat_urls.append(result["url"])
         print(f"OK")
 
+    # v0.3.1: thumb_page 校验(1-based, 必须在 [1, len(uploaded)] 范围)
+    if not (1 <= thumb_page <= len(uploaded)):
+        raise ValueError(
+            f"thumb_page={thumb_page} 越界, 有效范围 1..{len(uploaded)}"
+        )
+    thumb_media_id = uploaded[thumb_page - 1]["media_id"]
+    print(f"  [thumb] using page {thumb_page} ({image_paths[thumb_page - 1].name}) as cover")
+
     # 用微信 URL 重渲染（图片走微信 CDN 才不会被删）
     publish_html = article_mod.render_publish_article(
         sb, wechat_urls, template=template_id
@@ -262,7 +327,7 @@ def step_publish_draft(
     draft_id = pub_mod.create_draft(
         title=sb.title,
         content_html=publish_html,
-        thumb_media_id=uploaded[0]["media_id"],
+        thumb_media_id=thumb_media_id,
     )
 
     return {
@@ -270,6 +335,8 @@ def step_publish_draft(
         "uploaded_count": len(uploaded),
         "work_dir": str(work_dir),
         "title": sb.title,
+        "thumb_media_id": thumb_media_id,
+        "thumb_page": thumb_page,
     }
 
 
@@ -320,7 +387,12 @@ def step_rewrite_visual(
 
     # 立即重跑该页
     paths = step_gen_images(job_id, regenerate_pages=[page_no], data_dir=data_dir)
-    return paths[0]
+    # v0.3.2 修复：step_gen_images(regenerate_pages=…) 返回的是**全部页面**的有序列表，
+    # 原先直接 `return paths[0]` 会把 p1 的路径当成重画结果返回，必须按页码取。
+    for p in paths:
+        if int(p.stem.split("-")[0]) == page_no:
+            return p
+    raise RuntimeError(f"重画后未找到 page {page_no} 的图片（job={job_id}）")
 
 
 def step_show_intent_vs_actual(
@@ -454,25 +526,37 @@ def step_preflight(
     else:
         checks.append({"name": "page_count", "ok": True, "detail": f"{len(pages)} pages"})
 
-    # Check 3: 所有图片存在 + < 2MB
+    # Check 3: 所有图片存在 + 非空 + < 2MB
     pages_dir = work_dir / "pages"
     image_paths = sorted(pages_dir.glob("*.png")) if pages_dir.exists() else []
     if not image_paths:
         checks.append({"name": "images", "ok": False, "detail": "no images found"})
     else:
+        # v0.3.2：先查 0 字节/损坏文件。跑图失败的旧版本会留 0 字节占位，
+        # 这种文件能过 "<2MB" 检查，却会在上传时被 WeChat 拒掉。
+        empty = [p.name for p in image_paths if p.stat().st_size == 0]
         over_limit = []
         for p in image_paths:
             size_mb = p.stat().st_size / 1024 / 1024
             if size_mb > 2:
                 over_limit.append(f"{p.name}={size_mb:.1f}MB")
+        if empty:
+            checks.append({
+                "name": "image_empty",
+                "ok": False,
+                "detail": f"0 字节(跑图失败占位): {', '.join(empty)}. "
+                          f"重跑: step_gen_images(job_id, regenerate_pages=[页码])",
+            })
         if over_limit:
             checks.append({
                 "name": "image_size",
                 "ok": False,
                 "detail": f"over 2MB: {', '.join(over_limit)}. 公众号素材库上限 2MB.",
             })
-        else:
-            sizes = ", ".join(f"{p.name}={p.stat().st_size/1024/1024:.1f}MB" for p in image_paths)
+        if not empty and not over_limit:
+            sizes = ", ".join(
+                f"{p.name}={p.stat().st_size/1024/1024:.1f}MB" for p in image_paths
+            )
             checks.append({"name": "image_size", "ok": True, "detail": sizes})
 
     # Check 4: 推荐模板存在
@@ -505,6 +589,41 @@ def step_preflight(
 
 # ============ 内部工具函数 ============
 
+# v0.2.6: 人物故事检测 — 判断 topic 是否需要走 characters 一致性流程。
+# v0.3.2: 删除未使用的 _CHARACTER_STORY_KEYWORDS（写进 _is_character_story
+# 的 docstring 但从未被任何代码读取，纯死数据）。
+# 人物典故 / 典故类关键词 (中文)
+_CHARACTER_STORY_NAMES: list[str] = [
+    "郭子仪", "药葛罗", "仆固怀恩", "岳飞", "项羽", "刘邦", "韩信",
+    "诸葛亮", "刘备", "关羽", "张飞", "曹操", "赵云",
+    "李世民", "武则天", "李靖", "霍去病", "卫青",
+    "张巡", "许远", "文天祥", "辛弃疾", "戚继光", "郑成功",
+    "孔子", "老子", "庄子", "孟子", "屈原", "司马迁",
+]
+
+
+def _is_character_story(topic: str) -> bool:
+    """v0.2.6: 启发式判断 topic 是否是"人物故事"（需要 characters 一致性流程）。
+
+    规则：
+    - 含已知历史人物名（郭子仪/岳飞/...）→ True
+    - 含"单骑/退/入/破/斩/救"等动作 + 人名模式 → True
+    """
+    topic_lower = topic.lower()
+    # 1) 已知人物名
+    for name in _CHARACTER_STORY_NAMES:
+        if name in topic:
+            return True
+    # 2) topic 长度较短 + 含典故/故事/生平关键词
+    if any(kw in topic for kw in ["典故", "故事", "生平", "事迹", "传"]):
+        return True
+    # 3) 含"人名 + 动作词"模式（如 "看石崇与王恺争豪"）
+    import re
+    if re.search(r"[\u4e00-\u9fff]{2,4}(与|单骑|退|入|破|斩|救|讨|伐|击|围)", topic):
+        return True
+    return False
+
+
 def _load_storyboard(sb_path: Path) -> Storyboard:
     raw = json.loads(sb_path.read_text(encoding="utf-8"))
     return Storyboard(
@@ -516,6 +635,7 @@ def _load_storyboard(sb_path: Path) -> Storyboard:
         preface=raw.get("preface", ""),
         epigraph=raw.get("epigraph", ""),
         postscript=raw.get("postscript", ""),
+        characters=raw.get("characters", []),
         recommended_template=raw.get("recommended_template", ""),
         pages=[StoryPage(**p) for p in raw["pages"]],
     )

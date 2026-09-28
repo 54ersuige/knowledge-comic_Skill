@@ -20,3 +20,16 @@ _*.txt
 _*_out.txt
 *.bak
 *.log
+
+# v0.3.2: 一次性调试脚本（2026-09 张巡/王昭君/石崇等项目遗留）
+#   _xxx.py      —— 独立一次性脚本(_fix_* / _v30_* / _test_* / _deep_* / _batch_* …)
+#   _xxx_yyy.py  —— 同一脚本的迭代版本
+# 正式测试已提升到 scripts/tests/test_*.py，不受此规则影响。
+_*_*.py
+_*.py
+
+# 归档目录：脚本移到这里保留可回溯,但不再进版本库
+_archive/
+
+# 显式放行真实模块(check_alignment.py 被 scripts/run.py 直接 import,必须入库)
+!scripts/check_alignment.py
