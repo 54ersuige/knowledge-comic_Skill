@@ -967,32 +967,40 @@ def build_image_prompt(
             "Brush technique and pigment flatness required throughout. "
         )
 
-    assembled = (
-        f"{style_prefix}"
-        f"{style.prompt_en} "
-        f"{character_anchor} "
-        f"{style_lock_repeat}"
-        f"Scene: {scene_description} "
-        f"{composition_boost} "
-        f"{LIANHUANHUA_STYLE_LOCK} "
-        f"{PATTERN_SUPPRESS} "
-        f"{ZERO_TEXT_BOOST} "
-        f"Avoid: {negative}"
-    )
-    # v0.2.4 升级：Agnes API 限制 10000 字符。超限时优先砍 scene_description（核心是其他套话）。
-    if len(assembled) > 9800:
-        scene_max = max(2000, 9800 - (len(assembled) - len(scene_description)))
-        trimmed_scene = scene_description[:scene_max] + "..."
-        assembled = (
+    def _assemble(scene: str) -> str:
+        """唯一的 prompt 拼装点（v0.3.21）。
+
+        v0.3.21 前这里有两份几乎相同的代码（主路径 + 超限截断路径），
+        结果 v0.3.18 加 boost 时只改了主路径，截断路径漏掉
+        LIANHUANHUA_STYLE_LOCK + PATTERN_SUPPRESS —— 场景描述一长就走
+        截断路径，两条约束全丢，图直接崩成西式书房（kc_1790664590 p09）。
+
+        **消除重复而不是再补一次**，这样结构上不可能再漏。
+        """
+        return (
             f"{style_prefix}"
             f"{style.prompt_en} "
             f"{character_anchor} "
             f"{style_lock_repeat}"
-            f"Scene: {trimmed_scene} "
+            f"Scene: {scene} "
             f"{composition_boost} "
+            f"{LIANHUANHUA_STYLE_LOCK} "
+            f"{PATTERN_SUPPRESS} "
             f"{ZERO_TEXT_BOOST} "
             f"Avoid: {negative}"
         )
+
+    assembled = _assemble(scene_description)
+
+    # v0.2.4 升级：Agnes API 限制 10000 字符。超限时优先砍 scene_description
+    # （核心是其他套话）。v0.3.21 改成复用 _assemble，不走第二份拼装代码。
+    if len(assembled) > 9800:
+        overhead = len(assembled) - len(scene_description)
+        scene_max = max(2000, 9800 - overhead)
+        assembled = _assemble(scene_description[:scene_max] + "...")
+        # 仍超限则砍零文字/纹样说明的冗余（保底，正常不会走到）
+        if len(assembled) > 9800:
+            assembled = assembled[:9790]
     return assembled
 
 

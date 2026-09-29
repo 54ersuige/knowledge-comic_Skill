@@ -370,6 +370,39 @@ def test_char_gender_required() -> None:
     f = [x for x in r.findings if x.code == "CHAR_GENDER_MISSING"]
     check("报的是全文级单条", len(f) == 1 and f[0].page is None)
 
+
+def test_truncation_keeps_boosts() -> None:
+    """超限截断路径**不能丢** boost（v0.3.21 静默失败）。
+
+    **事故**（kc_1790664590 p09）：`build_image_prompt` 有两条拼装路径，
+    v0.3.18 加 boost 时只改了主路径，截断路径（scene 描述 > 9800 时走）
+    漏掉 LIANHUANHUA_STYLE_LOCK + PATTERN_SUPPRESS →
+    场景描述一长就丢约束 → 图崩成西式书房。
+
+    这是本项目反复出现的那类 bug：改了主路径忘了改旁路。
+    v0.3.14 的 regenerate_pages 缓存、v0.2.6 的 cinematic 剥离同源。
+    """
+    print("\n[14] 截断路径不丢 boost（v0.3.21）")
+    from scripts.core.prompts import build_image_prompt as bip
+    STYLE = "chinese_lianhuanhua_classic"
+    CHECKS = [("COMPLETELY BLANK", "PATTERN_SUPPRESS"),
+              ("NOT a 3D render", "LIANHUANHUA_STYLE_LOCK"),
+              ("NO TEXT", "ZERO_TEXT_BOOST"),
+              ("Avoid:", "negative")]
+
+    short = "A man in a dark robe kneels in a vast snowfield."
+    long_scene = short + " " * 0 + ("Broken staff, dead grass, grey sky. " * 200)
+
+    for label, scene in (("主路径", short), ("截断路径", long_scene)):
+        p = bip(STYLE, scene)
+        check(f"{label} 长度不超限", len(p) <= 9800, f"len={len(p)}")
+        for key, tag in CHECKS:
+            check(f"{label} 含 {tag}", key in p)
+
+    # 明确构造一个真的走截断的（长度 > 9800）
+    p = bip(STYLE, long_scene)
+    check("确实触发了截断", len(long_scene) > 2000, f"scene={len(long_scene)}")
+
 def main() -> int:
     test_real_job_clean()
     test_injected_faults()
@@ -384,6 +417,7 @@ def main() -> int:
     test_gender_anchor_no_leak()
     test_negation_across_parens()
     test_char_gender_required()
+    test_truncation_keeps_boosts()
 
     print(f"\n{'=' * 52}")
     print(f"passed {len(_passed)} / {len(_passed) + len(_failed)}")
