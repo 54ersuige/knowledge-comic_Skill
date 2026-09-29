@@ -608,14 +608,35 @@ def render_template_c(inp: ArticleInput) -> str:
                 f'background-color:#9b2332;"></span></p>'
             )
 
-        # 图 (去掉 border-radius，WeChat-safe)
+        # 图 + 图下文言蒙版（v0.3.11）
+        # 用户原话：「文言文要集成在图片中，在图片的下方，用类似蒙版的效果集成在图片上」
+        # 结构：图位是一个相对定位容器，<img> 在底层，文言引文用半透明蒙版压在图下缘。
         if i < len(inp.page_image_urls):
             url = inp.page_image_urls[i]
+            quote = (getattr(page, "dialogue", "") or "").strip()
+            if quote:
+                # 转义后保留换行（多句原文分行显示）
+                q_html = _esc(quote).replace("\n", "<br/>")
+                mask = (
+                    f'<div style="position:absolute;left:0;right:0;bottom:0;'
+                    f'padding:26px 16px 12px 16px;'
+                    f'background:linear-gradient(180deg,'
+                    f'rgba(20,16,12,0) 0%,'
+                    f'rgba(20,16,12,0.55) 42%,'
+                    f'rgba(20,16,12,0.86) 100%);">'
+                    f'<p style="margin:0;font-family:STKaiti,KaiTi,楷体,serif;'
+                    f'font-size:15px;line-height:24px;color:#f5efe2;'
+                    f'letter-spacing:1px;text-shadow:0 1px 3px rgba(0,0,0,0.6);">'
+                    f'　{q_html}　</p></div>'
+                )
+            else:
+                mask = ""
             out.append(
-                f'<p style="text-align:center;margin:0 20px 20px 20px;">'
-                f'<img src="{_esc(url)}" '
-                f'style="max-width:100%;" '
-                f'data-page="{page.page}" /></p>'
+                f'<div style="position:relative;margin:0 20px 20px 20px;">'
+                f'<img src="{_esc(url)}" style="max-width:100%;display:block;" '
+                f'data-page="{page.page}" />'
+                f'{mask}'
+                f'</div>'
             )
 
         # 正文 (line-height 1.9, 两端对齐) — v0.2.7.4 关键词高亮 + v0.2.9 per-page keywords
@@ -633,14 +654,15 @@ def render_template_c(inp: ArticleInput) -> str:
                     f'{_highlight_keywords(seg, page_kws)}</p>'
                 )
 
-        # 数据卡 / 引文卡 (v0.2.7.9: "定格瞬间" 字号加大 + 浅朱砂背景色块)
-        if len(quote) >= 4:
-            # v0.3.8.1：只渲染 page.dialogue，不再从 body 抽句子，
-            # 避免和正文段落内容重复。
-            # v0.3.10：文言引文通常是多句原文，dialogue 里用 \n 分隔。
-            # 没有 white-space:pre-line 换行会被吞掉，多句挤成一行。
+        # 「定格瞬间」点题卡（v0.3.11 语义纠正）
+        # 用户原话：「定格瞬间是对这个章节的核心内容和情感的点题，
+        # 是给用户的记忆点，是要跟内容和图片关联的」
+        # 所以它取 page.punchline（**白话点题金句**，与本图/正文呼应），
+        # 而不是文言引文 —— 文言已在图下蒙版呈现。
+        punch = (getattr(page, "punchline", "") or "").strip()
+        if len(punch) >= 4:
             page_kws = getattr(page, 'keywords', []) or []
-            content_html = _highlight_keywords(quote, page_kws)
+            content_html = _highlight_keywords(punch, page_kws)
 
             out.append(
                 f'<p style="font-size:11px;color:#9b2332;'
@@ -1448,23 +1470,35 @@ def render_layout_preview(sb: Storyboard, template: str = "e",
             for _ in sb.pages]
     html = render_publish_article(sb, urls, template=template)
 
-    # 按 data-page 把占位图后面插入分镜说明
-    # 模板里图位形如:
-    #   <p style="text-align:center;..."><img src="..." ... data-page="3" /></p>
-    # 匹配整个 <p> 块，把说明插到 </p> 之后。用命名分组避免下标写错。
+    # 按 data-page 把分镜说明注入到图位之后。
+    # v0.3.11：图位结构改成 <div style="position:relative"><img/><蒙版/></div>，
+    # 原来的 <p>...</p> 正则匹配不到了。两次独立替换，避免多分支命名分组的坑。
     by_page = {p.page: p for p in sb.pages}
 
-    def _replace(m: "re.Match") -> str:
-        page_no = int(m.group("page"))
+    def _note_for(page_no: int) -> str:
         p = by_page.get(page_no)
-        if p is None:
-            return m.group(0)
-        note = _storyboard_note(p)
-        return m.group(0) + note if note else m.group(0)
+        return _storyboard_note(p) if p else ""
+
+    # a) v0.3.11 新结构：div 图位（含蒙版）
+    # 蒙版内部还有嵌套 div，用 [^<>]* 排除尖括号来锚定 img 标签，
+    # 并允许到 "position:relative" 那个外层 div 结束（末尾连着 </div>）。
+    def _rep_div(m: "re.Match") -> str:
+        n = _note_for(int(m.group("page")))
+        return m.group(0) + n if n else m.group(0)
 
     html = re.sub(
-        r'(<p[^>]*>\s*<img[^>]*\bdata-page="(?P<page>\d+)"[^>]*/>\s*</p>)',
-        _replace, html)
+        r'<div style="position:relative[^"]*">\s*<img[^>]*\bdata-page="(?P<page>\d+)"[^>]*/>'
+        r'(?:(?!<div style="position:relative).)*?</div>',
+        _rep_div, html)
+
+    # b) 旧结构：p 图位（其他模板仍是这种）
+    def _rep_p(m: "re.Match") -> str:
+        n = _note_for(int(m.group("page")))
+        return m.group(0) + n if n else m.group(0)
+
+    html = re.sub(
+        r'<p[^>]*>\s*<img[^>]*\bdata-page="(?P<page>\d+)"[^>]*/>\s*</p>',
+        _rep_p, html)
 
     # 注入样式
     if "</head>" in html:

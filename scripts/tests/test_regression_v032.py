@@ -279,16 +279,18 @@ ck("e 模板正文也不含缩进",
 # 导致和正文段落完全重复。无 dialogue 时宁可不渲染这张卡。
 _html_dup = render_layout_preview(_sb, template="c")
 # HTML 里「定 格 瞬 间」字间有 span/空格，直接找关键片段
-ck("无 dialogue 时不渲染定格瞬间卡",
-   "瞬" not in _html_dup and "定 格" not in _html_dup,
+ck("无 punchline 时不渲染定格瞬间卡", "瞬" not in _html_dup and "定 格" not in _html_dup,
    "(实际出现 %d 次)" % _html_dup.count("瞬"))
 _sb_dlg = Storyboard(topic="T", style_id="chinese_lianhuanhua_classic", pages=[
     StoryPage(page=1, visual="SUBJECT: Su Wu; // 苏武", body="正文第一句。正文第二句。",
-              caption="题", highlight="起", keywords=["苏武"], dialogue="宁死不屈。"),
+              caption="题", highlight="起", keywords=["苏武"],
+              dialogue="杖汉节牧羊，节旄尽落。",
+              punchline="旄可以落，节不能失。"),
 ])
 _h = render_layout_preview(_sb_dlg, template="c")
-ck("有 dialogue 时渲染定格瞬间卡", "瞬" in _h and "定" in _h)
-ck("定格瞬间内容取自 dialogue", "宁不死" in _h or "宁死不屈" in _h)
+ck("有 punchline 时渲染定格瞬间卡", "瞬" in _h and "定" in _h)
+ck("定格瞬间内容取自 punchline", "旄可以落，节不能失。" in _h)
+ck("文言不在定格瞬间里", _h.count("杖汉节牧羊") == 1)
 
 # v0.3.8: planner prompt 侧的约定也锁住，避免以后改 prompt 时回退
 from scripts.core.planner import PLANNER_SYSTEM_PROMPT as _PS  # noqa: E402
@@ -309,10 +311,26 @@ _sb2 = Storyboard(topic="T", style_id="chinese_lianhuanhua_classic", pages=[
 ])
 _h2 = render_layout_preview(_sb2, template="c")
 ck("文言引文渲染进引文卡", "乃遣武以中郎将" in _h2)
-ck("引文卡支持多行换行", "white-space:pre-line" in _h2)
 ck("引文只渲染一次（不重复）",
    _h2.count("乃遣武以中郎将") == 1,
    "(出现 %d 次)" % _h2.count("乃遣武以中郎将"))
+
+# v0.3.11：三层结构 —— 图+蒙版文言 / 正文 / 定格瞬间(白话金句)
+# 语义纠正：定格瞬间是**点题金句**（与图文呼应、给记忆点），不是文言引文。
+_sb3 = Storyboard(topic="T", style_id="chinese_lianhuanhua_classic", pages=[
+    StoryPage(page=1, visual="SUBJECT: Su Wu; // 苏武",
+              body="公元前 100 年，苏武持节出使匈奴。随行一百多人，穿越塞外草原。",
+              caption="题", highlight="出使", keywords=["苏武"],
+              dialogue="杖汉节牧羊，卧起操持，节旄尽落。",
+              punchline="旄可以落，节不能失。"),
+])
+_h3 = render_layout_preview(_sb3, template="c")
+ck("文言叠在图上（蒙版容器）", "linear-gradient(180deg" in _h3)
+ck("蒙版在图下方（bottom:0）", "bottom:0" in _h3)
+ck("定格瞬间用 punchline", "旄可以落，节不能失。" in _h3)
+ck("定格瞬间不显示文言", _h3.count("杖汉节牧羊") == 1)
+ck("punchline 字段存在", "punchline" in _PS)
+ck("prompt 说明定格瞬间是点题", "点题" in _PS and "记忆点" in _PS)
 
 # v0.3.9: `// 中文速记` 绝不能进图像 prompt。
 # 实测苏武牧羊：带速记跑图 10 张全部跑偏成彩绘风/庭院景，
