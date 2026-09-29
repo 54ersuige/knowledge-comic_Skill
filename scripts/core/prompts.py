@@ -621,7 +621,23 @@ _CINEMATIC_TERM_PATTERNS: list[tuple[_re.Pattern, str]] = [
 
 # v0.3.9: 匹配 v0.3.7 让 LLM 写的 `// 中文速记`。
 # 速记只用于**审阅展示**，绝不能进图像 prompt（见 build_image_prompt 里的说明）。
-_ZH_NOTE_RE = _re.compile(r"\s*//\s*[^\n]*?(?=(?:\b[A-Z][A-Za-z ]{2,}\s*[:：])|$)")
+#
+# v0.3.15 修复：原正则的 `$` 兜底分支会在「速记后面还有英文内容」时
+# 把它一起吃掉 —— 实测把 p1 的 visual 从 981 字符截到 171 字符，
+# CAMERA/MOOD 等要素整段丢失。
+# 现在改成：**只删 `//` + 连续中文速记词**，遇到任何非中文字符立即停止。
+_ZH_NOTE_RE = _re.compile(r"\s*//\s*[一-鿿][一-鿿\s·、,，]*")
+# 兼容旧数据：速记后紧跟下一个大写要素标签的情况（保留标签，只删速记）
+_ZH_NOTE_RE2 = _re.compile(r"\s*//\s*[一-鿿][一-鿿\s·、,，]*?(?=\b[A-Z][A-Za-z ]{2,}\s*[:：])")
+
+# v0.3.15: 剥掉**纯中文夹注**（如 `black official cap (帻)` / `圆领袍（深灰）`）。
+# 这类单汉字/短词混在英文 prompt 里同样会冲淡风格锁定，但它们不是 `//` 速记，
+# 上面两条正则管不到。
+#
+# **安全性论证**：右括号 `)` 硬性界定匹配边界，匹配内容 100% 是汉字，
+# 因此**不可能吞掉括号外的任何英文**。这与 v0.3.15 之前那个带 `$` 兜底的
+# 宽泛正则（把 p1 visual 从 981 截到 171 字符）有本质区别。
+_ZH_GLOSS_RE = _re.compile(r"\s*[（(][\u4e00-\u9fa5]{1,8}[)）]\s*")
 
 
 def _strip_cinematic_terms(text: str) -> str:
@@ -683,7 +699,9 @@ def build_image_prompt(
         # 实测苏武牧羊：带速记跑图 10 张全部跑偏成彩绘风/庭院景，
         # 完全不是宣纸工笔连环画，且雪原/地窖/草原全被画成中式庭院。
         # 根因是中文速记混进英文 prompt 后，风格锁定被中文语义冲淡。
+        scene_description = _ZH_NOTE_RE2.sub("", scene_description)
         scene_description = _ZH_NOTE_RE.sub("", scene_description)
+        scene_description = _ZH_GLOSS_RE.sub(" ", scene_description)
         scene_description = _re.sub(r"\s{2,}", " ", scene_description).strip()
 
     # v0.2.10 修复: 中国画风格强化 STRICT STYLE 夹击 —— 头部 + 角色锚点后再次重复,

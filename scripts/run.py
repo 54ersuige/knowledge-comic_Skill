@@ -39,6 +39,7 @@ sys.path.insert(0, str(SKILL_ROOT))
 
 from scripts.core.config import get_config  # noqa: E402
 from scripts.core.planner import plan_storyboard, Storyboard, StoryPage, recommend_pages  # noqa: E402
+from scripts.core.preflight import run_preflight  # noqa: E402
 from scripts.core.image_gen import generate_pages, generate_character_references  # noqa: E402
 from scripts.core import article as article_mod  # noqa: E402
 from scripts.core import publisher as pub_mod  # noqa: E402
@@ -130,11 +131,42 @@ def step_plan(
     return sb, job_id, work_dir
 
 
-def step_gen_images(
+def step_preflight_images(
     job_id: str,
+    data_dir: Path | None = None,
+) -> dict:
+    """Step 辅助:生图前体检(不跑图)。
+
+    v0.3.15 新增。step_gen_images 内部已内联同一道关卡,本函数把它单独暴露,
+    用途是**改完 storyboard.json 先验一遍再决定要不要烧额度**。
+
+    Returns:
+        {"blocked": bool, "blocks": [...], "warns": [...], "report": str}
+    """
+    cfg = get_config()
+    work_root = data_dir or cfg.data_dir
+    sb_path = work_root / job_id / "storyboard.json"
+    if not sb_path.exists():
+        return {"blocked": True, "blocks": [], "warns": [],
+                "report": f"storyboard.json 不存在: {sb_path}"}
+
+    sb = _load_storyboard(sb_path)
+    pre = run_preflight(sb)
+    return {
+        "blocked": pre.blocked,
+        "blocks": [{"page": f.page, "code": f.code, "msg": f.msg, "hint": f.hint}
+                   for f in pre.blocks],
+        "warns": [{"page": f.page, "code": f.code, "msg": f.msg, "hint": f.hint}
+                  for f in pre.warns],
+        "report": pre.report(),
+    }
+
+
+def step_gen_images(    job_id: str,
     data_dir: Path | None = None,
     regenerate_pages: list[int] | None = None,
     auto_char_refs: bool = True,
+    skip_preflight: bool = False,
 ) -> list[Path]:
     """Step 2: 从 storyboard.json 跑图 → PNG 列表
 
@@ -142,6 +174,8 @@ def step_gen_images(
         job_id: job id
         regenerate_pages: 重画的页码列表（用户审核后给出）
         auto_char_refs: v0.2.5 人物故事自动跑角色参考图 + 用 i2i
+        skip_preflight: v0.3.15 逃生阀。设 True 跳过生图前体检
+            （体检有阻塞项但用户确认要硬跑时才用）
     Returns:
         图片 Path 列表（按页码排序）
 
@@ -155,6 +189,22 @@ def step_gen_images(
     work_dir = work_root / job_id
     sb_path = work_dir / "storyboard.json"
     sb = _load_storyboard(sb_path)
+
+    # v0.3.15: 生图前硬关卡。
+    # 放在这里（角色参考图之前）是因为**下面每一步都在烧额度** ——
+    # 角色参考图 1 张 + 页面图 N 张，全是真金白银。
+    # 关卡的作用是把静默失败（keywords 空 / 画字词 / 漏标性别）变成阻塞，
+    # 第一次就拦住，而不是烧完图才发现。
+    if not skip_preflight:
+        pre = run_preflight(sb)
+        if pre.blocked:
+            print(pre.report())
+            print(f"\n[gen] ABORT: 体检发现 {len(pre.blocks)} 个阻塞项，未跑图。"
+                  f"\n     修完 storyboard.json 后重跑；"
+                  f"\n     确认要硬跑可传 skip_preflight=True。")
+            raise SystemExit(1)
+        if pre.warns:
+            print(pre.report())
 
     # v0.2.5: 人物故事自动跑角色参考图
     character_refs = None
