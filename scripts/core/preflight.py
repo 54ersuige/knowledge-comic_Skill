@@ -111,6 +111,24 @@ class PreflightResult:
     def blocked(self) -> bool:
         return bool(self.blocks)
 
+    def to_dict(self) -> dict:
+        """v0.3.22：落盘 JSON 报告用。
+
+        Returns:
+            {"blocked": bool, "findings": [{"page","level","code","msg","hint"}], "ts": float}
+        """
+        import time
+        return {
+            "kind": "preflight",
+            "blocked": self.blocked,
+            "findings": [
+                {"page": f.page, "level": f.level, "code": f.code,
+                 "msg": f.msg, "hint": f.hint}
+                for f in self.findings
+            ],
+            "ts": time.time(),
+        }
+
     @property
     def ok(self) -> bool:
         return not self.findings
@@ -594,9 +612,15 @@ def _f_char_gender(storyboard, p: dict) -> list[Finding]:
     （桃花腮/柳叶眉/步摇簪花），再经 i2i 传进每一页。
     角色参考图是整条链路的**性别源头**，源头错了全批都错。
 
-    注意：`resolve_gender()` 有 KNOWN_GENDER 兜底表，知名正史人物能自动
-    判对。但 planner 是动态生成角色的，遇到库外名字就只剩文本线索猜测，
-    约 70% 可靠 —— 对一个会污染全部页面的源头字段，70% 不够。
+    v0.3.22 行为变更：以前 KNOWN_GENDER 兜底表里的角色（勾践/夫差/西施/张巡等
+    约 90 个正史人物）会自动通过，让 planner 偷懒不填 gender。**这违背了
+    v0.3.20 "gender 必填" 的设计** —— planner 必须自己填，库是 backup 不是
+    绕过借口。**现在统一阻塞**：任何 characters[].gender 缺失或非 enum 值，
+    不管在不在 KNOWN_GENDER 表，全部报 block。修复方法只有一个：补字段。
+
+    KNOWN_GENDER 表的作用降级为**安全网**：管线层（image_gen / resolve_gender）
+    仍然查表兜底，绝不让角色参考图失传；但 preflight 必须强制 planner 显式
+    表达，保留"史实铁律"的可审计性（来源=planner，不来源=LLM 自动猜）。
     """
     if p["page"] != 1:
         return []
@@ -609,25 +633,14 @@ def _f_char_gender(storyboard, p: dict) -> list[Finding]:
         g = (c.get("gender") if isinstance(c, dict) else "") or ""
         g = g.strip().lower()
         if g not in ("male", "female", "mixed"):
-            # KNOWN_GENDER 兜底能判出的不报（那是确定能对的）。
-            # 注意：**必须查表本身**，不能调 resolve_gender ——
-            # 它对任何名字都返回非空（默认 male），会把这个检查彻底架空，
-            # 「库外人物缺 gender」永远判成"能判"→ 永不阻塞。
-            # （测试直接打脸过这个 bug。）
-            try:
-                from scripts.core.prompts import KNOWN_GENDER
-                if (nm or "") in KNOWN_GENDER:
-                    continue
-            except Exception:
-                pass
             missing.append(nm)
     if missing:
         return [Finding(
             None, "block", "CHAR_GENDER_MISSING",
             f"角色缺 gender 字段：{missing}",
-            "性别决定角色参考图的面部锚点，参考图经 i2i 传进每一页 —— "
-            "源头错了全批都错。实测 kc_1790664590：夫差被画成女性，"
-            "污染全部含他的页面。补 characters[].gender = 'male'/'female'")]
+            "v0.3.22 起 KNOWN_GENDER 表不再为缺失兜底 —— planner 必须显式"
+            " 写 'male'/'female'，与 KNOWN_GENDER 是否收录无关。补 "
+            "characters[].gender = 'male'/'female' 即过")]
     return []
 
 def _f_era_anachronism(storyboard, p: dict) -> list[Finding]:

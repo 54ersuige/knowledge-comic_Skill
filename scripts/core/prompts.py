@@ -69,7 +69,19 @@ LIANHUANHUA_STYLE_LOCK = (
     "NOT a photograph, NOT a 3D render, NOT anime, NOT modern digital "
     "illustration, NOT glossy CG, NOT a Song/Ming/Qing court painting, "
     "NOT photorealistic. If any part of the image looks photographic or "
-    "renders in 3D, the whole image has failed."
+    "renders in 3D, the whole image has failed. "
+    # v0.3.22 (2026-09-29)：实测卧薪尝胆 p06/p09 暴露连环画强锚对现代室内物
+    # 品 + 写实盔甲的吸引力不够 —— 模型默认走"现代办公环境"或"3D CG 铠
+    # 甲"舒适区，连环画锚压不住。下面前缀是硬拒词，不是装饰建议。
+    "HARD REJECT — modern interior objects: NO bookshelf, NO floor-to-ceiling "
+    "window, NO office chair, NO sofa, NO glass window pane, NO porcelain tea "
+    "set, NO gas lamp, NO electric light, NO mechanical clock. Indoor scenes "
+    "must use bamboo screen / oil-paper umbrella / bronze brazier / wooden "
+    "screen / paper lantern only. "
+    "HARD REJECT — photoreal armor: NO chrome / metallic shine on armor, NO "
+    "3D-rendered polished leather, NO CG specular highlight on bronze / iron. "
+    "Armor must read as flat inked brushstroke with mineral pigment wash, the "
+    "same density and finish as the figure's robe."
 )
 
 # 3) 时代穿帮词：用于 preflight 检测 characters[].visual_signature
@@ -994,13 +1006,18 @@ def build_image_prompt(
 
     # v0.2.4 升级：Agnes API 限制 10000 字符。超限时优先砍 scene_description
     # （核心是其他套话）。v0.3.21 改成复用 _assemble，不走第二份拼装代码。
+    # v0.3.22 强化：fallback 不再 `assembled[:9790]` 硬切 —— 那会把 ZERO_TEXT_BOOST
+    # 和 Avoid:negative 一起切掉。改为**只砍 scene**且**保底再砍一定保留尾部**。
     if len(assembled) > 9800:
         overhead = len(assembled) - len(scene_description)
-        scene_max = max(2000, 9800 - overhead)
+        scene_max = max(2000, 9800 - overhead - 100)  # 余 100 防边界
         assembled = _assemble(scene_description[:scene_max] + "...")
-        # 仍超限则砍零文字/纹样说明的冗余（保底，正常不会走到）
+        # 仍超限（极少见，scene 自身就接近 9800）→ 砍 SCENE 而不是砍整体
+        # 永远保留 _assemble 的后段（ZERO_TEXT_BOOST + Avoid）。
         if len(assembled) > 9800:
-            assembled = assembled[:9790]
+            overhead2 = len(assembled) - len(scene_description[:scene_max])
+            scene_max2 = max(500, 9800 - overhead2 - 100)
+            assembled = _assemble(scene_description[:scene_max2] + "...")
     return assembled
 
 

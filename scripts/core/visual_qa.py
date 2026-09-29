@@ -105,6 +105,29 @@ class VisualQAResult:
     def ok(self) -> bool:
         return not self.findings
 
+    def to_dict(self) -> dict:
+        """v0.3.22：落盘 JSON 报告用。
+
+        Returns:
+            {"checked": int, "skipped": int, "ok": bool, "error": str|None,
+             "findings": [{"page","level","code","msg","confidence","evidence"}],
+             "ts": float}
+        """
+        import time
+        return {
+            "kind": "visual_qa",
+            "checked": self.checked,
+            "skipped": self.skipped,
+            "ok": self.ok,
+            "error": self.error,
+            "findings": [
+                {"page": f.page, "level": f.level, "code": f.code,
+                 "msg": f.msg, "confidence": f.confidence, "evidence": f.evidence}
+                for f in self.findings
+            ],
+            "ts": time.time(),
+        }
+
     def report(self) -> str:
         if not self.findings:
             head = f"✅ 视觉审核通过（{self.checked} 页"

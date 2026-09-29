@@ -65,19 +65,25 @@ def base_sb() -> dict:
 # --- 1. 真实 job：0 阻塞，且不能有误报 code -------------------------------
 
 def test_real_job_clean() -> None:
+    """真实 job 体检：**核心是防误报**，不是"任何阻塞都不能有"。
+
+    v0.3.22 起 CHAR_GENDER_MISSING 是阻塞项，且对库内人物（苏武/李陵/夫差等）
+    也生效。kc_1790586703 是历史数据，characters 没显式写 gender —— 这是**正
+    确的 v0.3.22 行为**（强迫 planner 显式表达），不是关卡漏报。
+
+    测试只校验**不会误报**的 code（GENDER_PARTIAL/NO_TEXT_MISSING/等），
+    阻塞项允许出现 CHAR_GENDER_MISSING（这是设计意图）。
+    """
     print("\n[1] 真实 job kc_1790586703 体检")
     if not REAL_JOB.exists():
         check("real job 存在", False, str(REAL_JOB))
         return
     sb = json.loads(REAL_JOB.read_text(encoding="utf-8"))
     r = run_preflight(sb)
-    check("0 阻塞项", not r.blocked,
-          f"blocks={[f.code for f in r.blocks]}")
     # GENDER_PARTIAL 曾经 10/10 误报，必须彻底消失
     check("无误报 GENDER_PARTIAL", "GENDER_PARTIAL" not in codes(r))
     # v0.3.18：NO_TEXT_MISSING 语义已变（从"缺声明=风险"改成
     # "planner 忽略了整条铁律的信号"），代码层已兜底所以只能是 warn。
-    # 苏武这批 9/10 页没写声明，但图基本干净 —— 正说明它不能当阻塞项。
     check("NO_TEXT_MISSING 不再是阻塞项", "NO_TEXT_MISSING" not in
           {f.code for f in r.blocks})
     # 0 字节图静默污染的变体：pages 为空时不能崩
@@ -351,12 +357,22 @@ def test_negation_across_parens() -> None:
 
 
 def test_char_gender_required() -> None:
-    """characters[].gender 必填（v0.3.20）。"""
+    """characters[].gender 必填（v0.3.20 + v0.3.22 强化）。
+
+    v0.3.22 行为变更：以前 KNOWN_GENDER 表内人物（夫差/勾践/西施/张巡等 ~90 个）
+    自动通过 — 让 planner 偷懒不填 gender。v0.3.22 起统一阻塞，
+    KNOWN_GENDER 表只是 image_gen 管线的安全网，**不再是 preflight 的兜底**。
+    """
     print("\n[13] gender 必填阻塞")
     sb = base_sb()
-    # 库内人物缺 gender -> KNOWN_GENDER 兜底，不应报
+    # v0.3.22 变更：库内人物缺 gender 也必须报 block（不再被 KNOWN_GENDER 兜底绕过）
     sb["characters"] = [{"name": "夫差", "role": "反派", "visual_signature": "素袍"}]
-    check("库内人物缺 gender 不误报",
+    check("库内人物缺 gender 必报",
+          "CHAR_GENDER_MISSING" in codes(run_preflight(sb)))
+    # 库内人物+显式 gender -> 不报
+    sb["characters"] = [{"name": "夫差", "role": "反派", "gender": "male",
+                         "visual_signature": "素袍"}]
+    check("库内人物+显式 gender 不报",
           "CHAR_GENDER_MISSING" not in codes(run_preflight(sb)))
     # 显式写了 -> 不报
     sb["characters"] = [{"name": "张三", "role": "配角", "gender": "male",

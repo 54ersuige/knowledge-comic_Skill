@@ -153,6 +153,13 @@ def step_preflight_images(
 
     sb = _load_storyboard(sb_path)
     pre = run_preflight(sb)
+    # v0.3.22：落盘 JSON 报告，方便复盘/对比/在 Mavis 对话里读
+    try:
+        rep = pre.to_dict()
+        (work_root / job_id / "preflight_report.json").write_text(
+            json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"[preflight] 报告落盘失败（不影响体检结果）：{e}）")
     return {
         "blocked": pre.blocked,
         "blocks": [{"page": f.page, "code": f.code, "msg": f.msg, "hint": f.hint}
@@ -173,12 +180,23 @@ def _run_visual_qa(job_id: str, data_dir: Path | None = None) -> None:
     视觉审核报的是**概率性**的输出问题 —— 后者只能提示，不能拦。
 
     审核失败（网络/超时/模型报错）只打印一行警告，绝不打断流程。
+
+    v0.3.22：跑完落盘 `data/<job>/visual_qa_report.json`，方便复盘/对比。
     """
+    cfg = get_config()
+    work_root = data_dir or cfg.data_dir
     try:
         res = run_visual_qa(job_id, data_dir=data_dir)
     except Exception as e:
         print(f"[visual-qa] 审核异常（不影响已生成的图）：{e}")
         return
+    # v0.3.22：落盘 JSON 报告
+    try:
+        rep = res.to_dict()
+        (work_root / job_id / "visual_qa_report.json").write_text(
+            json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"[visual-qa] 报告落盘失败（不影响审核结果）：{e}")
     if res.error:
         print(f"[visual-qa] {res.error}")
     elif res.ok:

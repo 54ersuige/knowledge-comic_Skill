@@ -333,8 +333,11 @@ visual 字段**严禁**包含以下元素（即使概念正确，模型会把字
      吴王阖闾   → 「越，非尔敌也，汝必记之。」
    - 拿不准就写你最有把握的那一句，**但不要交白卷**。
 
-7.4 **characters[].gender 必填（v0.3.20）**
+7.4 **characters[].gender 必填（v0.3.20 + v0.3.22 强化）**
    - 每个角色必须显式写 `"gender": "male"` 或 `"gender": "female"`
+   - **v0.3.22 强化**：JSON schema 已设为 `enum: ["male", "female"]`。
+     任何其他写法（含空、缺字段、`男`/`man`/`M`/`male?`）preflight
+     立即阻塞（CHAR_GENDER_MISSING），不会进跑图。**绝对不要交白卷**。
    - **为什么是必填**：性别决定角色参考图的面部锚点，而参考图会经 i2i
      传进**每一页**。一旦猜错，男性角色会被画成女性（桃花腮/步摇簪花），
      整批图全崩。实测 kc_1790664590：夫差因缺 gender 被画成女性，
@@ -531,7 +534,9 @@ MOOD: solemn duty, desaturated blue-white palette // 庄严 克制的蓝白
   "epigraph": "题记（30-50 字）",
   "postscript": "后记（30-80 字）",
   "characters": [{"name": "角色名", "role": "主角/配角/反派",
-                  "gender": "male 或 female（**必填**）",
+                  # v0.3.22: enum 而不是字符串 —— 避免 LLM 输出 "男"/"man"/"M"
+                  # 这类乱七八糟的值让 preflight 校验不通过。enum 强制两个之一。
+                  "gender": {"enum": ["male", "female"]},
                   "visual_signature": "..."}]
     {
       "name": "主角姓名（如「郭子仪」）",
