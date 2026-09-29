@@ -294,8 +294,25 @@ ck("定格瞬间内容取自 dialogue", "宁不死" in _h or "宁死不屈" in _
 from scripts.core.planner import PLANNER_SYSTEM_PROMPT as _PS  # noqa: E402
 
 ck("prompt 要求 body 写成短句", "3-5 个短句" in _PS)
+ck("prompt 要求 body 用白话", "白话" in _PS)
+ck("prompt 要求 dialogue 放文言原文", "文言原文" in _PS)
+ck("prompt 禁止 hedging 表述", "（或" in _PS or "自我不确定" in _PS)
 ck("prompt 说明 dialogue 不得复制 body",
    "不能" in _PS and "dialogue" in _PS and "重复" in _PS)
+
+# v0.3.10: 白话正文 + 文言引文两层结构，且引文卡只渲染一次
+_sb2 = Storyboard(topic="T", style_id="chinese_lianhuanhua_classic", pages=[
+    StoryPage(page=1, visual="SUBJECT: Su Wu; // 苏武",
+              body="公元前 100 年，苏武持节出使匈奴。随行一百多人，穿越塞外草原。",
+              caption="题", highlight="出使", keywords=["苏武"],
+              dialogue="武帝嘉其义，乃遣武以中郎将使持节送匈奴使。"),
+])
+_h2 = render_layout_preview(_sb2, template="c")
+ck("文言引文渲染进引文卡", "乃遣武以中郎将" in _h2)
+ck("引文卡支持多行换行", "white-space:pre-line" in _h2)
+ck("引文只渲染一次（不重复）",
+   _h2.count("乃遣武以中郎将") == 1,
+   "(出现 %d 次)" % _h2.count("乃遣武以中郎将"))
 
 # v0.3.9: `// 中文速记` 绝不能进图像 prompt。
 # 实测苏武牧羊：带速记跑图 10 张全部跑偏成彩绘风/庭院景，

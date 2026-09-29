@@ -637,6 +637,8 @@ def render_template_c(inp: ArticleInput) -> str:
         if len(quote) >= 4:
             # v0.3.8.1：只渲染 page.dialogue，不再从 body 抽句子，
             # 避免和正文段落内容重复。
+            # v0.3.10：文言引文通常是多句原文，dialogue 里用 \n 分隔。
+            # 没有 white-space:pre-line 换行会被吞掉，多句挤成一行。
             page_kws = getattr(page, 'keywords', []) or []
             content_html = _highlight_keywords(quote, page_kws)
 
@@ -647,21 +649,16 @@ def render_template_c(inp: ArticleInput) -> str:
                 f'<p style="font-size:18px;color:#1a1a1a;'
                 f'margin:0 20px 20px 20px;padding:14px 16px;'
                 f'background-color:rgba(155, 35, 50, 0.07);'
-                f'border-left:3px solid #9b2332;line-height:24px;'
-                f'font-weight:500;'
+                f'border-left:3px solid #9b2332;line-height:26px;'
+                f'font-weight:500;white-space:pre-line;'
                 f'font-family:STKaiti,KaiTi,楷体,serif;">'
                 f'　{content_html}　</p>'
             )
 
-        # dialogue
-        if page.dialogue:
-            out.append(
-                f'<p style="font-size:15px;line-height:1.9;color:#9b2332;'
-                f'margin:0 20px 24px 20px;padding:8px 12px;'
-                f'background:rgba(155,35,50,0.05);border-left:3px solid #9b2332;'
-                f'text-indent:0;font-family:STKaiti,KaiTi,楷体,serif;">'
-                f'「{_esc(page.dialogue)}」</p>'
-            )
+        # v0.3.10：删除此处重复的 dialogue 渲染块。
+        # dialogue 已在上方「定格瞬间」引文卡里渲染过一次，
+        # 这里又渲染一遍 → 同一句文言在同一页出现两次。
+        # 引文只在「定格瞬间」出现一次即可。
 
     # === 结尾 (v0.2.7.1: 删"完"印章 + 现代启示做大做强) ===
     # 现代启示作为"金句卡" (v0.2.7.4: 更大字 + 强 padding + 大留白收束 + 头部标识强化)
