@@ -159,11 +159,79 @@ def test_both_input_paths() -> None:
           f"dict={codes(d_res)} obj={codes(o_res)}")
 
 
+
+# --- 5. 卧薪尝胆实测暴露的三个问题（v0.3.17）-------------------------
+
+def test_seven_element_not_actor() -> None:
+    """七要素标签不是角色段（实测 10/10 误报的根因）。"""
+    print("\n[5] 七要素标签排除")
+    from scripts.core.preflight import _is_seven_element_label
+    for lbl in ("SUBJECT: Gou Jian, 35yo", "ACTION: Helu pushes the sword",
+                "CAMERA: Medium shot", "DEPTH LAYERS: FOREGROUND: wood",
+                "LIGHTING: Hard sun", "MOOD: tense", "PLACEMENT: left"):
+        check(f"{lbl.split(':')[0]} 是标签", _is_seven_element_label(lbl))
+    for role in ("Rider: Han man", "Standing figure: man", "Foreground man: x",
+                 "Slave: kneeling", "[GENDER:male] Rider: man"):
+        check(f"{role.split(':')[0][:12]} 是角色段",
+              not _is_seven_element_label(role))
+
+
+def test_pinyin_character_recognized() -> None:
+    """拼音人名 + 中文 characters[] 要能对上（实测 9/10 漏报的根因）。"""
+    print("\n[6] 中英双通道角色识别")
+    from scripts.core.preflight import _roles_registered
+    chars = [{"name": "勾践", "role": "主角", "visual_signature": "x"},
+             {"name": "夫差", "role": "反派", "visual_signature": "y"}]
+    allowed = {"勾践", "夫差"}
+    # 拼音写法：visual 是英文，characters 是中文 —— 实测的真实形态
+    v_pinyin = "SUBJECT: Gou Jian, 35yo, wearing tattered dark silk robe, " \
+               "holding a staff. ACTION: Gou Jian kneels."
+    check("拼音写法认得出已登记", _roles_registered(v_pinyin, {"characters": chars},
+                                                allowed))
+    # 中文写法
+    v_cn = "SUBJECT: 勾践，35岁，身着破袍。// 勾践 苦胆 雪原"
+    check("中文写法认得出已登记",
+          _roles_registered(v_cn, {"characters": chars}, allowed))
+    # characters[] 非空时，角色锚点会前置到**每一页**（build_image_prompt 的
+    # gender 分支），所以即使本页主体写作 "Anon" 也有性别锚点 → 放行。
+    # 这是管线事实，不是放水。我第一次写这条断言时把它写反了。
+    v_anon = "SUBJECT: Anon, 30yo, standing."
+    check("characters 非空时匿名页仍放行（锚点前置到每页）",
+          _roles_registered(v_anon, {"characters": chars}, allowed))
+
+    # 真正的风险：characters[] 为空 + 匿名主体 → 没有任何 gender 锚点来源
+    check("characters 为空 + 匿名主体 -> 报（真风险）",
+          not _roles_registered(v_anon, {"characters": []}, set()))
+
+    # characters[] 为空 + 单个具名角色 -> 无歧义
+    v_named = "SUBJECT: 勾践，35岁。// 勾践 苦胆"
+    check("characters 为空 + 单具名角色 -> 放行",
+          _roles_registered(v_named, {"characters": []}, set()))
+
+    # characters[] 为空 + 多个具名角色 -> 性别可能串，必须报
+    v_multi = "SUBJECT: 勾践与夫差对坐。// 勾践 夫差 会稽"
+    check("characters 为空 + 多具名角色 -> 报（性别可能串）",
+          not _roles_registered(v_multi, {"characters": []}, set()))
+
+
+def test_dialogue_rule_is_mandatory() -> None:
+    """铁律 7.1 必须保持"每页必填"（实测 0/10 的防回退断言）。"""
+    print("\n[7] dialogue 铁律防回退")
+    from scripts.core.planner import PLANNER_SYSTEM_PROMPT
+    check("含'每页必填'", "每页必填" in PLANNER_SYSTEM_PROMPT)
+    check("含'不允许留空'", "不允许留空" in PLANNER_SYSTEM_PROMPT)
+    check("JSON schema 标注必填",
+          "每页必填" in PLANNER_SYSTEM_PROMPT.split('"pages"')[-1][:800])
+    check("给出题材范例", "苦身焦思" in PLANNER_SYSTEM_PROMPT)
+
 def main() -> int:
     test_real_job_clean()
     test_injected_faults()
     test_negation_aware()
     test_both_input_paths()
+    test_seven_element_not_actor()
+    test_pinyin_character_recognized()
+    test_dialogue_rule_is_mandatory()
 
     print(f"\n{'=' * 52}")
     print(f"passed {len(_passed)} / {len(_passed) + len(_failed)}")

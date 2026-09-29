@@ -228,8 +228,12 @@ def _f_gender(p: dict, style_id: str, allowed: set[str]) -> list[Finding]:
         return []
 
     # A) 段首前缀式：多角色并列出镜 → 逐段校验
+    # v0.3.17：排除七要素标签。`SUBJECT:` / `ACTION:` / `CAMERA:` 和
+    # `Rider:` / `Standing figure:` 语法上都是"大写词 + 冒号"，
+    # 正则无法区分，只能靠黑名单。实测不加排除会 10/10 页误报。
     actor_lines = [ln.strip() for ln in v.splitlines()
-                   if _ACTOR_LINE_RE.match(ln.strip())]
+                   if _ACTOR_LINE_RE.match(ln.strip())
+                   and not _is_seven_element_label(ln.strip())]
     if len(actor_lines) >= 2:
         missing = [ln for ln in actor_lines
                    if not re.match(r"\[GENDER:\w+\]", ln, re.I)]
@@ -242,21 +246,96 @@ def _f_gender(p: dict, style_id: str, allowed: set[str]) -> list[Finding]:
                             "漏标的那个会被模型随机性别化（p9 常惠事故）")]
         return []
 
-    # B) 角色 bible 式 / 单人页
+    # B) 角色 bible 式 / 单人页 / 七要素写法
     if not re.search(r"\[GENDER:\w+\]", v, re.I):
-        named = [n for n in _named_roles(v, p) if n in allowed]
-        if named:
+        # v0.3.17：必须走**中英双通道**判断"角色是否已登记"。
+        # 实测打脸 —— planner 的 visual 用拼音（Gou Jian / Fu Cai / Helu），
+        # characters[] 登记的是中文（勾践 / 夫差 / 阖闾），
+        # 只按中文匹配会让 `n in allowed` 恒为 False，
+        # 9/10 页漏标 GENDER 却一个都不报。
+        if _roles_registered(v, p, allowed):
             return []      # 角色登记在 characters[] → 角色锚点兜底
         return [Finding(p["page"], "warn", "GENDER_NONE",
-                        "visual 里没有 [GENDER:xx] 标记，且角色未登记进 characters[]",
+                        "visual 里没有 [GENDER:xx] 标记，且主角未登记进 characters[]",
                         "连环画风格靠它定男女；缺失时主角性别随机。"
                         "二选一：加 [GENDER:male]，或写进 storyboard.characters[]")]
     return []
 
 
+# planner 稳定输出的英文人名模式：`Name, 35yo` / `Li Ling (40yo, ...)`
+_EN_NAME_RE = re.compile(
+    r"\b([A-Z][a-z]{1,12}(?:\s+[A-Z][a-z]{1,12})?)\s*[,(\uff08]\s*\d{1,3}\s*yo",
+    re.I)
+
+
 # 角色段行首：`[GENDER:xx] Rider:` 或 `Standing figure:` / `Foreground man:`
 _ACTOR_LINE_RE = re.compile(
     r"^\[GENDER:\w+\]|^[A-Z][A-Za-z]*(?:\s+[a-z]+){0,2}\s*:")
+
+# 七要素标签（v0.2.3 画面表达系统）—— 它们是**画面要素**不是角色
+_SEVEN_ELEMENT_LABELS = {
+    "subject", "action", "camera", "placement", "depth layers", "depth",
+    "lighting", "mood", "expression", "key visual", "foreground",
+    "midground", "background", "composition", "color palette", "palette",
+    "medium", "shot", "lens", "note", "style", "framing", "angle",
+}
+
+
+def _is_seven_element_label(line: str) -> bool:
+    """这行是七要素标签吗？（v0.3.17：排除它们，否则 GENDER_PARTIAL 10/10 误报）"""
+    m = re.match(r"^\[GENDER:\w+\]\s*", line)
+    if m:
+        line = line[m.end():]
+    m = re.match(r"^([A-Za-z][A-Za-z ]{0,20}?)\s*[:：]", line)
+    if not m:
+        return False
+    return m.group(1).strip().lower() in _SEVEN_ELEMENT_LABELS
+
+
+def _roles_registered(visual: str, p: dict, allowed: set[str]) -> bool:
+    """本页主角是否有 gender 锚点来源？
+
+    **v0.3.17 两次修正的教训**：
+
+    1. 最初只按中文名匹配 `"勾践" in "Gou Jian, 35yo..."` → 恒 False，
+       9/10 页漏报。planner 的 visual 用拼音、characters 用中文，两边没有
+       共享标识，靠名字匹配跨不了语言。
+    2. 试图像正则那样从英文名反推 → 拼音表要硬编码，而角色是 LLM 动态
+       生成的，维护不了。**方向本身错了。**
+
+    **正确的问题不是"名字对上了吗"，而是"有没有 gender 锚点来源"**。
+    名字匹配只是来源之一，而且是最脆弱的那个。真正的来源有三个：
+      a) 本页内联 `[GENDER:xx]`
+      b) characters[] 非空 —— build_image_prompt 会用角色锚点拼装，
+         单主角页的 gender 由 characters[0] 的 visual_signature 决定
+      c) 本页只有一个人物（单人页无歧义，模型不会猜错）
+
+    所以判据改成：b 或 c 任一成立即视为已覆盖。这不依赖跨语言名字匹配，
+    因此对拼音/英文/中文三种写法一视同仁。
+
+    **注意 (b) 的依据是管线事实**：characters[] 非空时，
+    build_image_prompt 会把该角色锚点前置到**每一页**（v0.3.0 gender 分支），
+    所以即使本页主体写作 `Anon`，也仍然有性别锚点，不会随机化。
+    """
+    # (b) characters[] 非空 → 角色锚点每页都拼进 prompt（管线事实）
+    if (p.get("characters") or []) or allowed:
+        return True
+
+    # (c) characters[] 为空时，退回"本页具名角色恰好 1 个"→ 无性别歧义。
+    # 不能写成 `len(...) == 0`：那会把 `Anon, 30yo` / `Han man` 这类
+    # **匿名**描述也放行，而它们没有任何 gender 锚点来源，
+    # 模型会随机性别化 —— 正是 p9 常惠事故的形态。
+    return len(_named_roles(visual, p)) == 1
+
+def _is_seven_element_label(line: str) -> bool:
+    """这行是七要素标签吗？"""
+    m = re.match(r"^\[GENDER:\w+\]\s*", line)
+    if m:
+        line = line[m.end():]
+    m = re.match(r"^([A-Za-z][A-Za-z ]{0,20}?)\s*[:：]", line)
+    if not m:
+        return False
+    return m.group(1).strip().lower() in _SEVEN_ELEMENT_LABELS
 
 
 
@@ -271,14 +350,18 @@ def _named_roles(visual: str, p: dict) -> list[str]:
     """
     names: list[str] = []
 
-    # 1) 中文速记（人看的注释，planner 每页都写人名）
-    for m in re.finditer(r"//\s*([^\n]+)", visual):
-        for tok in re.split(r"[\s·、,，/]+", m.group(1)):
-            tok = tok.strip()
-            if 2 <= len(tok) <= 4 and re.fullmatch(r"[一-龥]+", tok):
-                if tok in COMMON_TERMS or tok in _GENERIC_VISUAL_WORDS:
-                    continue
-                names.append(tok)
+    # 1) ~~中文速记~~ —— **刻意不做人名识别**。
+    # 中文速记是画面元素速记（`勾践 苦胆 雪原 绝望`），人和物混在一起。
+    # 靠词表排除"这不是人名"永远补不全（`_GENERIC_VISUAL_WORDS` 里没有
+    # "苦胆"，换个题材就又炸）—— 与"百家姓白名单"是同类的错误。
+    #
+    # 1b) 带**年龄或身份修饰**的具名主语：`勾践，35岁` / `勾践身背长剑` /
+    #     `夫差正在帐中` —— planner 描述主体时必然带这类修饰。
+    for _m in re.finditer(
+            r"([\u4e00-\u9fa5]{2,4})[，,]?\s*"
+            r"(?:\d{1,3}\s*(?:岁|yo)|身[背负手执持]|正[在即]|已经|正在)",
+            visual):
+        names.append(_m.group(1))
 
     # 2) 正史人名
     for n in KNOWN_HISTORICAL_NAMES:
@@ -299,11 +382,6 @@ def _named_roles(visual: str, p: dict) -> list[str]:
     return out
 
 
-# 视觉描述里的泛化物词 —— 不是人名
-_GENERIC_VISUAL_WORDS = {
-    "枯草", "荒原", "挖掘", "绝望", "坚毅", "雪原", "对比", "矛盾", "帐内",
-    "火光", "劝降", "哭声", "沉默", "眼神", "白发", "少年", "将军", "士兵",
-}
 
 
 
