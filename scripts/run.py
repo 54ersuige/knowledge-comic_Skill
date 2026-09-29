@@ -184,7 +184,14 @@ def step_gen_images(
             postscript=sb.postscript,
             characters=sb.characters,
         )
-        new_paths = generate_pages(rerender_sb, job_id, character_refs=character_refs)
+        # v0.3.14：把 force_pages 传下去。
+        # 之前漏传 → generate_pages 走 `out.exists()` 缓存判定 →
+        # regenerate_pages=[N] **静默跳过重画**，返回的是旧图。
+        new_paths = generate_pages(
+            rerender_sb, job_id,
+            character_refs=character_refs,
+            force_pages=set(regenerate_pages),
+        )
         # 替换原路径
         existing = {int(p.stem.split("-")[0]): i for i, p in enumerate(_current_images(work_dir))}
         all_paths = _current_images(work_dir)

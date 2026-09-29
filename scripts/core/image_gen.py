@@ -322,17 +322,40 @@ def generate_character_references(
     return result
 
 
+# v0.3.14：角色别名表 —— 按页匹配 i2i 参考图时用。
+# planner 生成的 visual 里用**英文名**（Su Wu / Chang Hui / Li Ling），
+# 而 characters[].name 存的是**中文名**（苏武 / 常惠 / 李陵），
+# 不映射就匹配不上 → 退化成全局套用 → 参考图污染本页场景。
+CHARACTER_ALIASES: dict[str, str] = {
+    "苏武": "Su Wu",
+    "李陵": "Li Ling",
+    "常惠": "Chang Hui",
+    "张胜": "Zhang Sheng",
+    "卫律": "Wei Lü",
+    "呼韩邪单于": "Huhanye Chanyu",
+    "单于": "Chanyu",
+}
+
+
 def generate_pages(
     storyboard: Storyboard,
     job_id: str,
     character_refs: dict[str, list[Path]] | None = None,
     progress_cb=None,
+    force_pages: set[int] | None = None,
 ) -> list[Path]:
     """批量跑图，返回每页 PNG 路径列表。
 
     Args:
         storyboard: 分镜
         job_id: 任务 ID
+        character_refs: 角色参考图
+        progress_cb: 进度回调
+        force_pages: **强制重画**的页码集合。
+            v0.3.14 新增 —— 之前没有这个入口，导致 `regenerate_pages=[9]`
+            走 generate_pages() 时被 `out.exists()` 缓存判定命中，
+            **静默跳过重画**，用户以为重画了其实拿到的是旧图
+            （实测 09:57 的旧图被当成"重画成功"返回）。
         character_refs: 角色参考图（v0.2.5: 每个 ref 列表会作为 i2i 输入传给对应页）
                        key = 角色 name, value = 多视图 Path 列表
         progress_cb: 进度回调 done/total/page
@@ -342,59 +365,60 @@ def generate_pages(
     cfg = get_config()
     out_dir = cfg.data_dir / job_id / "pages"
     out_dir.mkdir(parents=True, exist_ok=True)
+    force = set(force_pages or ())
 
     # 收集所有参考图（i2i 一次性传入）
-    # Agnes i2i 硬限制: 最多 6 张 input images。优先 front + three_quarter（最具信息量）。
-    all_refs: list[Path] = []
-    if character_refs:
+    # v0.3.14：i2i 参考图改为**按页匹配**，不再全局套用。
+    #
+    # 事故：苏武牧羊 p9 重画时画风跑成 3D 西式室内。根因是
+    # `character_refs` 里包含"李陵"，而 p9 画面里根本没有李陵 ——
+    # 参考图把"室内/近景人物"的构图带偏了，整页跟着崩。
+    # 隔离实验证实：同一个 prompt，去掉 i2i 后画风完全正确。
+    #
+    # 规则：只给「本页 visual 里明确出现」的角色传参考图。
+    # 一个都没匹配上 → 走纯 t2i（宁可少一层一致性约束，也不污染场景）。
+    def _refs_for_page(visual: str) -> list[Path]:
+        if not character_refs:
+            return []
+        v = visual or ""
+        picked: list[Path] = []
         for name, paths in character_refs.items():
+            # 角色英文名/别名也匹配（planner 用英文名，参考图按中文名存）
+            aliases = [name, CHARACTER_ALIASES.get(name, name)]
+            if not any(a and a in v for a in aliases):
+                continue
             valid = [p for p in paths if p.exists() and p.stat().st_size > 1024]
-            # 优先排序: front > three_quarter > side > back
             priority_order = ["front", "three_quarter", "side", "back"]
             valid.sort(key=lambda p: (
                 next((i for i, k in enumerate(priority_order) if k in p.stem), 99)
             ))
-            all_refs.extend(valid)
-        # 截断到 6 张（Agnes 硬限制）。多角色时按角色轮询取最优先视图
-        if len(all_refs) > 6:
-            # Round-robin: 每个角色先取 front, 然后 3-4, 等
-            per_char_priority = ["front", "three_quarter", "side", "back"]
-            truncated: list[Path] = []
-            char_paths_grouped = list(character_refs.values())
-            # 先按视图循环，每轮每个角色取一张
-            for view_name in per_char_priority:
-                for char_paths in char_paths_grouped:
-                    if len(truncated) >= 6:
-                        break
-                    for p in char_paths:
-                        if view_name in p.stem and p not in truncated:
-                            truncated.append(p)
-                            break
-                if len(truncated) >= 6:
-                    break
-            all_refs = truncated
-            logger.warning(
-                "[job=%s] Agnes i2i 限制 6 张 refs, 截断到 %d 张 (优先 front > 3-4)",
-                job_id, len(all_refs),
-            )
-        if all_refs:
-            logger.info("[job=%s] using %d character refs for i2i", job_id, len(all_refs))
+            picked.extend(valid[:2])   # 每角色最多 2 张视图
+        return picked[:6]             # Agnes 硬上限 6 张
 
     results: list[Path] = []
     failed: list[int] = []
     total = len(storyboard.pages)
     for i, page in enumerate(storyboard.pages):
         out = out_dir / f"{page.page:02d}-page.png"
-        if out.exists() and out.stat().st_size > 1024:
+        # v0.3.14：force_pages 里的页**不查缓存**，强制重画
+        if page.page in force:
+            logger.info("[job=%s] FORCE regen page %d", job_id, page.page)
+        elif out.exists() and out.stat().st_size > 1024:
             logger.info("[job=%s] cache hit %s", job_id, out.name)
             results.append(out)
             continue
         logger.info("[job=%s] gen page %d/%d: %s", job_id, i + 1, total, page.caption[:30])
+        # v0.3.14：按页匹配参考图（只给本页出现的角色）
+        page_refs = _refs_for_page(page.visual)
+        if character_refs and not page_refs:
+            logger.info("[job=%s] page %d 无匹配角色, 走纯 t2i", job_id, page.page)
+        elif page_refs:
+            logger.info("[job=%s] page %d 用 %d 张 refs", job_id, page.page, len(page_refs))
         ok = generate_one(
             visual=page.visual,
             style_id=storyboard.style_id,
             out_path=out,
-            reference_paths=all_refs if all_refs else None,
+            reference_paths=page_refs or None,
             characters=storyboard.characters,
         )
         if not ok:
