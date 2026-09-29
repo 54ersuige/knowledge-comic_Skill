@@ -82,6 +82,56 @@ ANACHRONIC_MARKERS = [
     "繁复", "华丽",
 ]
 
+# === v0.3.17 朝代服饰考据速查表（planner prompt 可见）===
+# 根因（2026-09-29）：实测卧薪尝胆项目，planner 给春秋勾践写"圆领袍+武冠+幞头"，
+# 三件全是唐/汉/宋才有，春秋错配。ANACHRONIC_MARKERS 只是事后检测，planner 看不到。
+# 修复：把"朝代速查表"直接挂进 PLANNER_SYSTEM_PROMPT，planner 写 visual_signature 时
+# 必须按 characters[].era 字段选对应朝代的服饰，并查本表对照禁忌。
+CN_DYNASTY_COSTUME_GUIDE = """
+## 朝代服饰考据速查表（planner 必读 · 严禁错配）
+
+**规则**：characters[].era 字段确定年代 → visual_signature 必须严格用本表的服饰/冠帽/配饰。
+**禁止**：把后世元素写进前朝（例：春秋人物写"圆领袍+武冠+幞头"是三件错配，唐/汉/宋才有）。
+
+### 春秋战国（前770-前221）
+- 主衣：曲裾深衣（衣襟绕身后数圈）/ 直裾单衣 / 素色麻袍
+- 冠帽：峨冠 / 皮弁（白鹿皮帽）/ 鹖冠（武将装饰）/ 笄纚（发簪+头巾）
+- 配饰：青铜佩剑 / 玉璧 / 组玉佩 / 丝绦腰带
+- 禁忌：圆领袍（唐以后）/ 乌纱帽（明以后）/ 龙纹/补子（明以后）/ 金线刺绣
+
+### 秦汉（前221-220）
+- 主衣：曲裾深衣 / 直裾袍 / 襦裙（女性）
+- 冠帽：长冠 / 进贤冠 / 武冠（汉定型）/ 委貌冠
+- 配饰：佩剑 / 玉环 / 组绶（彩色丝带标识官阶）/ 笏板
+- 禁忌：乌纱帽（明以后）/ 圆领袍（唐以后）/ 补服（明以后）
+
+### 魏晋南北朝（220-589）
+- 主衣：宽袍大袖 / 褒衣博带 / 交领宽袖衫
+- 冠帽：笼冠（黑漆纱笼）/ 小冠 / 进贤冠
+- 配饰：麈尾（清谈名士持）/ 羽扇 / 嵌宝剑
+- 禁忌：圆领袍（唐以后）/ 蹀躞带（唐以后）/ 展脚幞头（宋以后）
+
+### 隋唐（581-907）
+- 主衣：圆领窄袖袍（官常服）/ 大袖襦裙 + 半臂（女性）
+- 冠帽：软脚幞头（初唐）/ 翘脚幞头（盛唐）/ 浑脱帽（胡风）
+- 配饰：鱼符（出入宫禁凭证）/ 玉带 + 蹀躞带（带銙+小袋）/ 佩剑 / 笏板
+- 禁忌：乌纱帽（明以后）/ 补子（明以后）/ 顶戴花翎（清以后）/ 云肩（宋以后定型）
+
+### 宋元（960-1368）
+- 宋主衣：东越直领袍 / 圆领窄袖 / 鹤氅（道士风度）/ 背子（女性外衣）
+- 元主衣：质孙服（连体紧身袍）/ 辫线袍 / 罟罟冠（蒙古贵族女性）
+- 冠帽：宋 - 展脚幞头（长直脚）/ 元 - 钹笠帽
+- 配饰：宋 - 玉骨朵 / 笏板 / 元 - 海东青（小猎鹰）/ 弓矢
+- 禁忌：补子 / 乌纱帽 / 金线龙袍 / 清官服元素
+
+### 明清（1368-1912）
+- 明主衣：圆领袍 + 补子（前胸后背方形纹样区分官阶）/ 飞鱼服（赐服）
+- 清主衣：箭衣 / 马褂 / 朝服（圆领+披肩领+补子）
+- 冠帽：明 - 乌纱帽（黑圆顶，前低后高）/ 翼善冠（亲王）/ 凤冠（命妇）/ 清 - 顶戴花翎 + 红缨暖帽
+- 配饰：明 - 牙牌 / 笏板 / 玉带 / 清 - 朝珠（108颗）/ 翎管 / 扳指 / 鼻烟壶
+- 禁忌：不要把明以前人物写成"戴乌纱穿补服"（明专属）；不要把清以前人物写成"顶戴花翎朝珠"（清专属）
+"""
+
 # === 中国画构图 booster（替代 cinematic 三件套） ===
 # v0.2.5 (2026-09-22)：历史典故类风格 (chinese_lianhuanhua_classic / cn_xuanfeng / guochao_manhua)
 # 必须用中国画构图语言（散点透视/留白/平面色块/白描+朱砂勾线），不能用西方镜头语言，
@@ -369,8 +419,169 @@ CHARACTER_ANCHORS: dict[str, str] = {
 def get_character_anchor(style_id: str) -> str:
     """根据风格返回对应角色锚点。"""
     return CHARACTER_ANCHORS.get(style_id, CHARACTER_SCIENTIST)
+
+# === v0.3.20 性别单一真源 =============================================
+# 事故：page 级按 [GENDER:xx] 切男女分支，char 级拿写死默认锚点（含 FEMALE
+# 妆发），导致 characters/夫差-front.png 被画成女性，再经 i2i 污染每一页。
+# 修法：性别解析收敛到**一个函数**，page / char 两级共用。
+
+# 中文名 → 已知性别（正史人物库）。用于 characters[] 没写 gender 时的兜底。
+# 覆盖不了所有人物（planner 是动态生成的），所以只作 fallback。
+KNOWN_GENDER: dict[str, str] = {
+    # 先秦
+    "孔子": "male", "老子": "male", "庄子": "male", "孟子": "male",
+    "孙膑": "male", "廉颇": "male", "蔺相如": "male", "荆轲": "male",
+    "勾践": "male", "夫差": "male", "文种": "male", "范蠡": "male",
+    "伍子胥": "male", "伍员": "male", "专诸": "male", "要离": "male",
+    "西施": "female", "妲己": "female", "貂蝉": "female",
+    "管仲": "male", "鲍叔牙": "male", "晏婴": "male", "商鞅": "male",
+    "屈原": "male", "荀子": "male", "墨子": "male", "韩非": "male",
+    # 秦汉
+    "秦始皇": "male", "刘邦": "male", "项羽": "male", "韩信": "male",
+    "张良": "male", "萧何": "male", "霍去病": "male", "卫青": "male",
+    "李广": "male", "苏武": "male", "李陵": "male", "常惠": "male",
+    "卫律": "male", "司马迁": "male", "班超": "male", "王昭君": "female",
+    "王莽": "male", "董仲舒": "male", "赵充国": "male", "冒顿": "male",
+    "呼韩邪": "male", "细君公主": "female", "解忧公主": "female",
+    # 三国两晋
+    "诸葛亮": "male", "刘备": "male", "关羽": "male", "张飞": "male",
+    "赵云": "male", "曹操": "male", "周瑜": "male", "陆逊": "male",
+    "司马懿": "male", "司马昭": "male", "陶渊明": "male", "祖逖": "male",
+    "谢安": "male", "王羲之": "male", "陈寿": "male",
+    # 隋唐
+    "李世民": "male", "李渊": "male", "李靖": "male", "魏征": "male",
+    "郭子仪": "male", "张巡": "male", "许远": "male", "颜真卿": "male",
+    "安禄山": "male", "史思明": "male", "李光弼": "male",
+    "房玄龄": "male", "杜如晦": "male", "长孙无忌": "male",
+    "武则天": "female", "杨贵妃": "female", "李白": "male", "杜甫": "male",
+    "白居易": "male", "王维": "male", "李清照": "female",
+    # 宋元明清
+    "岳飞": "male", "文天祥": "male", "辛弃疾": "male", "陆游": "male",
+    "苏轼": "male", "王安石": "male", "寇准": "male", "包拯": "male",
+    "虞允文": "male", "毕再遇": "male", "王坚": "male", "余玠": "male",
+    "文种": "male", "曾国藩": "male", "左宗棠": "male", "林则徐": "male",
+    "郑成功": "male", "戚继光": "male", "袁崇焕": "male", "李自成": "male",
+    "朱元璋": "male", "朱棣": "male", "康熙": "male", "雍正": "male",
+    "乾隆": "male", "崇祯": "male", "秦桧": "male", "韩世忠": "male",
+    "孙中山": "male", "鲁迅": "male", "蔡元培": "male",
+    "文成公主": "female", "王昭君": "female", "杨门女将": "female",
+    "王宝钏": "female", "秦香莲": "female", "卓文君": "female",
+}
+
+# 中文 → 英文 性别词映射
+_GENDER_WORDS = {
+    "male": ("male", "man", "men", "boy", "he", "his", "him", "himself",
+             "gentleman", "warrior", "lord", "father", "son", "brother",
+             "king", "emperor", "general", "duke", "prince", "official",
+             "elder", "old man", "young man", "male character"),
+    "female": ("female", "woman", "women", "girl", "she", "her", "hers",
+               "herself", "lady", "mother", "daughter", "sister", "wife",
+               "queen", "empress", "princess", "dame", "girl", "old woman",
+               "young woman", "female character", "beauty"),
+    # 中文
+    "中": ("男", "女子", "女人", "她", "他的妻子", "夫人", "小姐", "姑娘", "母"),
+    "中女": ("女", "母", "妻", "娘", "妇", "姑", "姊", "妹"),
+}
+
+_FEMALE_HINT_CN = ("女", "她", "母", "妻", "妾", "姑", "姊", "妹", "娘",
+                   "夫人", "小姐", "姑娘", "妇", "妃", "后")
+_MALE_HINT_CN = ("男", "他", "父", "子", "夫", "兄", "弟", "君", "侯",
+                 "伯", "公", "将军", "大夫", "士", "臣")
+
+
+def resolve_gender(
+    text: str = "",
+    explicit: str = "",
+    name: str = "",
+) -> str:
+    """**性别解析的唯一入口**（v0.3.20）。page 级和 char 级都调这个。
+
+    优先级（从强到弱，**越靠前越可信**）：
+      1. explicit —— 调用方显式传的 gender 参数（characters[].gender 字段）
+      2. text 里的 `[GENDER:xx]` 标记 —— planner 的显式声明
+      3. name 在 KNOWN_GENDER 里 —— 正史人物性别
+      4. text 里的性别代词/称谓 —— 中文 + 英文
+      5. name 自身的构词线索（如「西施」「王昭君」）
+      6. **默认 male**
+
+    第 6 条的默认值是 v0.3.20 的关键改动：原默认是 female
+    （`CHARACTER_CN_LIANHUANHUA_MODERN` 内含 FEMALE 妆发分支），
+    对"主角多半是男性"的历史题材是错的默认值。
+    **默认 male 是更安全的错** —— 错判成女性会让男性角色性转、
+    污染 i2i 参考图并波及全部页面；错判成男性只影响女性角色，
+    而女性角色在历史题材里通常有明确的女性称谓能被第 4/5 条抓到。
+    """
+    # 1) explicit
+    if explicit:
+        e = explicit.strip().lower()
+        if e in ("male", "m", "男", "男性"):
+            return "male"
+        if e in ("female", "f", "女", "女性"):
+            return "female"
+        if e in ("mixed", "both", "混合"):
+            return "mixed"
+
+    t = (text or "").lower()
+
+    # 2) [GENDER:xx] 标记
+    import re as _re
+    m = _re.search(r"\[gender:\s*(male|female|mixed)\]", t, _re.I)
+    if m:
+        return m.group(1).lower()
+
+    # 3) 正史人物库
+    nm = (name or "").strip()
+    if nm in KNOWN_GENDER:
+        return KNOWN_GENDER[nm]
+    # 名字里含已知人物（如「吴王夫差」）
+    for known, g in KNOWN_GENDER.items():
+        if len(known) >= 2 and known in nm:
+            return g
+
+    # 4) 代词/称谓（英文优先，中文次之）
+    for lang, groups in (("en", _GENDER_WORDS), ):
+        for g, words in groups.items():
+            for w in words:
+                if _re.search(r"\b" + _re.escape(w) + r"\b", t):
+                    return g
+    # 中文线索（测试打脸过：原实现用 `sum(1 for w in ... if w in text)`，
+    # 但「女子」这类词不含任何单字条目，且"男"常作为「男子/男人」出现，
+    # 计数法被无关字稀释。改成**按词表顺序匹配，优先女性称谓** ——
+    # 中文语境里明确写"女"是强信号，男性线索往往只是泛称）。
+    txt = text or ""
+    for w in ("女子", "女人", "女性", "少女", "妇人", "她"):
+        if w in txt:
+            return "female"
+    for w in ("男子", "男人", "男性", "少年", "书生", "他"):
+        if w in txt:
+            return "male"
+
+    # 5) 名字构词线索
+    if nm:
+        if any(w in nm for w in ("王昭君", "西施", "貂蝉", "妃", "后", "公主")):
+            return "female"
+
+    # 6) 默认 male（见 docstring）
+    return "male"
+
+
+def get_gender_anchor(gender: str) -> str:
+    """按性别取连环画锚点片段（page / char 级共用）。"""
+    base = CHARACTER_CN_LIANHUANHUA_FACE
+    g = (gender or "").lower()
+    if g == "female":
+        return f"{base} {CHARACTER_CN_LIANHUANHUA_GENDER_FEMALE}"
+    if g == "mixed":
+        return (f"{base} {CHARACTER_CN_LIANHUANHUA_GENDER_FEMALE} "
+                f"{CHARACTER_CN_LIANHUANHUA_GENDER_MALE}")
+    return f"{base} {CHARACTER_CN_LIANHUANHUA_GENDER_MALE}"
+
+
 def _resolve_cn_lianhuanhua_anchor(gender: str, scene_description: str) -> str:
     """v0.3.0: 按 gender 拼装 chinese_lianhuanhua_classic 锚点。
+
+    v0.3.20：本函数已委托给 `resolve_gender()`（唯一真源），
+    避免 page 级和 char 级两套逻辑漂移。
 
     优先级:
       1. 显式 gender 参数(female/male/mixed)— build_image_prompt 调用方直接指定

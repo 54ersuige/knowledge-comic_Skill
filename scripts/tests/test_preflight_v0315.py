@@ -278,6 +278,98 @@ def test_code_level_boosts_injected() -> None:
     check("ZERO_TEXT_BOOST 仍在", "NO TEXT" in p)
     check("长度未超 Agnes 上限", len(p) < 9800, f"len={len(p)}")
 
+
+# --- 8. v0.3.20 性别单一真源 ---------------------------------------------
+
+def test_resolve_gender() -> None:
+    """性别解析优先级（v0.3.20 事故：char 级没走这套，被画成女性）。"""
+    print("\n[10] resolve_gender 优先级")
+    from scripts.core.prompts import resolve_gender as rg
+
+    # 3) 正史人物库
+    for nm, exp in [("夫差", "male"), ("勾践", "male"), ("张巡", "male"),
+                    ("西施", "female"), ("王昭君", "female"), ("武则天", "female"),
+                    ("吴王夫差", "male"), ("越王勾践", "male")]:
+        check(f"{nm} -> {exp}", rg(name=nm) == exp, rg(name=nm))
+
+    # 1) explicit 最高优先级（即便与人物库冲突）
+    check("explicit 压过人物库", rg(explicit="female", name="夫差") == "female")
+    # 2) [GENDER:] 标记
+    check("[GENDER:female] 生效",
+          rg(text="[GENDER:female] a woman stands", name="夫差") == "female")
+    # 4) 文本线索
+    check("英文代词", rg(text="A woman in red robe, she stands") == "female")
+    check("中文称谓", rg(text="西施浣纱，女子临水") == "female")
+    # 6) 默认 male（v0.3.20 关键改动：原默认 female）
+    check("无信号默认 male", rg(text="A figure standing", name="") == "male")
+    check("库外人物默认 male", rg(name="张三丰") == "male")
+
+
+def test_gender_anchor_no_leak() -> None:
+    """男性锚点不能带女性妆发（否定语境要能识别）。"""
+    print("\n[11] 性别锚点无串味")
+    from scripts.core.image_gen import _build_character_view_prompt as build
+    from scripts.core.preflight import _positive_mention
+    FEM = ["桃花腮", "步摇", "簪花", "花钿", "柳叶眉"]
+
+    p_male = build("夫差", "反派", "素面深褐葛麻袍", "front",
+                   "chinese_lianhuanhua_classic")
+    check("男性 prompt 声明 male", "SUBJECT GENDER: MALE" in p_male)
+    check("男性 prompt 无肯定女性妆发",
+          not any(_positive_mention(p_male, w) for w in FEM),
+          str([w for w in FEM if _positive_mention(p_male, w)]))
+    check("男性 prompt 无 FEMALE-GENDER STYLING",
+          "FEMALE-GENDER STYLING" not in p_male)
+    check("男性 prompt 有 MALE-GENDER STYLING",
+          "MALE-GENDER STYLING" in p_male)
+
+    p_fem = build("西施", "配角", "青色窄袖短襦", "front",
+                  "chinese_lianhuanhua_classic")
+    check("女性 prompt 声明 female", "SUBJECT GENDER: FEMALE" in p_fem)
+    check("女性 prompt 有 FEMALE-GENDER STYLING",
+          "FEMALE-GENDER STYLING" in p_fem)
+    # 注意：`'MALE-GENDER STYLING' in 'FEMALE-GENDER STYLING'` 是 True ——
+    # 子串误判，测试自己踩过一次。必须排除 FEMALE 后再看。
+    check("女性 prompt 无纯 MALE 分支",
+          ("MALE-GENDER STYLING" not in p_fem
+           or "FEMALE-GENDER STYLING" in p_fem))
+
+
+def test_negation_across_parens() -> None:
+    """否定语境跨括号（v0.3.20 修的真缺陷）。"""
+    print("\n[12] 否定语境跨括号")
+    from scripts.core.preflight import _positive_mention as pm
+    neg = "(NOT 步摇 - too feminine), NO 花钿, NO 簪花"
+    for w in ("步摇", "花钿", "簪花"):
+        check(f"'{w}' 在否定作用域内", not pm(neg, w), pm(neg, w))
+    pos = "peach blossom hairpin 步摇 in her hair"
+    check("肯定语境不误判", pm(pos, "步摇"))
+    # 否定作用域不能无限延伸
+    far = "NO calligraphy. " + ("padding text " * 12) + "robe with 繁复 pattern"
+    check("否定不跨太远", pm(far, "繁复"))
+    check("大写 NOT 生效", not pm("STRICT NO TEXT, NOT calligraphy", "calligraphy"))
+
+
+def test_char_gender_required() -> None:
+    """characters[].gender 必填（v0.3.20）。"""
+    print("\n[13] gender 必填阻塞")
+    sb = base_sb()
+    # 库内人物缺 gender -> KNOWN_GENDER 兜底，不应报
+    sb["characters"] = [{"name": "夫差", "role": "反派", "visual_signature": "素袍"}]
+    check("库内人物缺 gender 不误报",
+          "CHAR_GENDER_MISSING" not in codes(run_preflight(sb)))
+    # 显式写了 -> 不报
+    sb["characters"] = [{"name": "张三", "role": "配角", "gender": "male",
+                         "visual_signature": "素袍"}]
+    check("显式 gender 不报",
+          "CHAR_GENDER_MISSING" not in codes(run_preflight(sb)))
+    # 库外人物缺 gender -> 阻塞
+    sb["characters"] = [{"name": "无名氏", "role": "配角", "visual_signature": "素袍"}]
+    r = run_preflight(sb)
+    check("库外人物缺 gender 阻塞", "CHAR_GENDER_MISSING" in codes(r))
+    f = [x for x in r.findings if x.code == "CHAR_GENDER_MISSING"]
+    check("报的是全文级单条", len(f) == 1 and f[0].page is None)
+
 def main() -> int:
     test_real_job_clean()
     test_injected_faults()
@@ -288,6 +380,10 @@ def main() -> int:
     test_dialogue_rule_is_mandatory()
     test_era_anachronism()
     test_code_level_boosts_injected()
+    test_resolve_gender()
+    test_gender_anchor_no_leak()
+    test_negation_across_parens()
+    test_char_gender_required()
 
     print(f"\n{'=' * 52}")
     print(f"passed {len(_passed)} / {len(_passed) + len(_failed)}")

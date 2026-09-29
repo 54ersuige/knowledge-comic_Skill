@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ import requests
 from .config import get_config
 from .planner import Storyboard
 from .prompts import build_image_prompt
+from .prompts import get_gender_anchor, resolve_gender
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +225,9 @@ def generate_one(
 
 
 def _build_character_view_prompt(character_name: str, role: str, visual_signature: str,
-                                  view: str, style_id: str) -> str:
+                                  view: str, style_id: str,
+    gender: str = "auto",
+) -> str:
     """为单张角色参考图构造 prompt。
 
     v0.2.5: 参考 baoyu-comic 模式 — 跑干净的"角色站立姿势"参考图，
@@ -244,11 +248,22 @@ def _build_character_view_prompt(character_name: str, role: str, visual_signatur
         "back": "facing away from the viewer, showing the back",
     }.get(view, "facing the viewer")
 
-    character_anchor = get_character_anchor(style_id)
+    # v0.3.20：char 级也走统一性别解析。
+    # 事故根因：这里原本是 `get_character_anchor(style_id)`，拿到的是写死的
+    # `CHARACTER_CN_LIANHUANHUA_MODERN`（内含 FEMALE 桃花腮/步摇簪花分支），
+    # 导致 characters/夫差-front.png 被画成女性，再经 i2i 污染每一页。
+    resolved = (gender if gender in ("male", "female", "mixed")
+                else resolve_gender(visual_signature, name=character_name))
+    if style_id == "chinese_lianhuanhua_classic":
+        character_anchor = get_gender_anchor(resolved)
+    else:
+        character_anchor = get_character_anchor(style_id)
+    gender_clause = f"SUBJECT GENDER: {resolved.upper()}. Must clearly read as a {resolved} figure. "
     return (
         f"{style_prefix}"
         f"{style.prompt_en} "
         f"{character_anchor} "
+        f"{gender_clause}"
         f"Subject: {character_name} ({role}) - {visual_signature}. "
         f"Pose: standing in a neutral pose, {view_desc}. "
         f"Background: plain neutral backdrop, no scenery, no props. "
@@ -300,20 +315,41 @@ def generate_character_references(
         safe_name = "".join(c for c in name if str.isalnum) or "char"
         char_paths: list[Path] = []
 
+        # v0.3.19: 签名指纹 —— 签名变了就必须重画参考图。
+        # 原实现只看 `out.exists()`，改 visual_signature 后参考图仍是旧的，
+        # i2i 把旧形象带回每一页，**改签名完全无效**（kc_1790664590 事故）。
+        # 与 v0.3.14 的 regenerate_pages 缓存事故同源：改了输入却沿用旧产物。
+        sig_hash = hashlib.sha256(
+            f"{name}|{role}|{sig}|{style_id}|"
+            f"{char.get('gender', 'auto')}|"
+            f"{getattr(cfg, 'image_model', '')}"
+            .encode("utf-8")).hexdigest()[:16]
+        stamp = out_dir / f"{safe_name}.sig"
+
         for i, view in enumerate(views, start=1):
             out = out_dir / f"{safe_name}-{view}.png"
-            if out.exists() and out.stat().st_size > 1024:
-                # 缓存命中: 跳过
+            fresh = (out.exists() and out.stat().st_size > 1024
+                     and stamp.exists()
+                     and stamp.read_text(encoding="utf-8").strip() == sig_hash)
+            if fresh:
+                # 缓存命中: 签名没变，跳过
                 logger.info("[job=%s] cache hit %s", job_id, out.name)
                 char_paths.append(out)
                 continue
-            prompt = _build_character_view_prompt(name, role, sig, view, style_id)
+            prompt = _build_character_view_prompt(
+                name, role, sig, view, style_id,
+                gender=char.get("gender", "auto"))
             logger.info("[job=%s] gen char ref %s view %d/%d", job_id, name, i, len(views))
             ok = _call_agnes(prompt, out, reference_paths=None)
             if ok:
                 char_paths.append(out)
             else:
                 logger.warning("[job=%s] char ref failed: %s view %s", job_id, name, view)
+
+        # v0.3.19: 4 个视图都成功后写指纹，下次比对用。
+        # 只在有图时才写 —— 全失败时不写，下次会自动重试。
+        if char_paths:
+            stamp.write_text(sig_hash, encoding="utf-8")
 
         result[name] = char_paths
 

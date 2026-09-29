@@ -1,10 +1,10 @@
 ---
 name: knowledge-comic
 description: Knowledge comic generator that turns a topic + bullet list into a publication-ready WeChat MP draft. Use when user asks for "知识漫画", "公众号知识漫画", "科普漫画", "典故解读", "历史故事漫画", "一图读懂", "科普文章配图". Hands off the entire pipeline — style recommendation, storyboard split, image generation, article HTML render, and WeChat draft creation — through step-by-step Python APIs that Mavis calls directly inside the conversation.
-version: 0.3.8
+version: 0.3.17
 ---
 
-# Knowledge Comic (WeChat MP) — v0.3.16
+# Knowledge Comic (WeChat MP) — v0.3.17
 
 把「主题 + 要点」变成可一键发布到公众号草稿箱的知识漫画图文。**端到端在 Mavis 对话里逐步执行 + 用户拍板**。
 
@@ -40,6 +40,23 @@ python guide.py "张巡守睢阳"   # 中文主题
 ```
 
 返回 JSON：`{"style_id": "chinese_lianhuanhua_classic", "template_id": "c", "alternates": [...], "rationale": "..."}`
+
+## v0.3.17 核心变化（2026-09-29，朝代服饰考据铁律）
+
+**根因**：卧薪尝胆项目实跑发现 planner 给春秋勾践写"圆领袍 + 武冠 + 幞头"，三件全是唐/汉/宋才有，春秋错配。`ANACHRONIC_MARKERS` 只是事后检测表（不进 prompt），planner 拆镜时根本看不到禁忌。
+
+**修复**：
+1. **`characters[]` 加 `era` 字段**（v0.3.17 必填）— 朝代/年代，如"春秋末年"/"唐代"/"北宋"/"明中期"。
+2. **`CN_DYNASTY_COSTUME_GUIDE` 嵌入 PLANNER_SYSTEM_PROMPT**（不再只进 preflight 检测表）— 6 段朝代速查表（春秋战国/秦汉/魏晋/隋唐/宋元/明清），每段列主衣 + 冠帽 + 配饰 + 禁忌。
+3. **新增铁律 7.4「朝代服饰考据铁律」** — 4 条强制：(a) 每个角色必填 era；(b) visual_signature 必须按 era 查速查表；(c) "圆领袍+武冠+幞头"等三朝错配自检；(d) 不要为"画面好看"用后世元素。
+4. **JSON schema characters 字段更新** — visual_signature 例句改成"戴黑色软脚幞头, 穿朱砂色圆领窄袖袍配玉带蹀躞带"，避免 LLM 抄旧例沿用错配词。
+5. **同步 dev 源** `D:\minimax-agent_cn-project\知识漫画微信公众号\src\core\` prompts.py + planner.py。
+
+**验证**：3 个 smoke 测试全部 rc=0（test_smoke_v029 / test_gender_v030 / test_regression_v032）；PLANNER_SYSTEM_PROMPT 18.4KB（增 5KB 速查表）；6 段关键词全到位（曲裾深衣/峨冠/乌纱帽/顶戴花翎/朝珠/...）。
+
+**边界**：planner LLM 不一定真按速查表写，需要用户在 Layout Preview 阶段肉眼核 p1/p5/p10 的视觉签名。下次跑建议手动传 `characters=[{name, role, era, visual_signature}, ...]` 双保险。
+
+---
 
 ## v0.3.16 / v0.3.15 核心变化（2026-09-28，两道自动关卡）
 
@@ -608,6 +625,7 @@ knowledge-comic/
 
 ## 变更记录
 
+- **0.3.17**（2026-09-29）：朝代服饰考据铁律 — `characters[].era` 必填 / `CN_DYNASTY_COSTUME_GUIDE` 进 planner prompt（春秋/秦汉/魏晋/隋唐/宋元/明清 6 段）/ 新铁律 7.4 / 同步 dev 源。根因：卧薪尝胆勾践被写"圆领袍+武冠+幞头"三朝错配
 - **0.3.8**（2026-09-28）：排版结构化定版 —— 正文一句一段（最长块 124→33 字）/ 去首行缩进 / 修引号被劈开 / 定格瞬间不再与正文重复。规范写入 references/templates.md，作为历史经典故事类默认
 - **0.3.7**（2026-09-28）：分镜速记全中文 + 取消截断 + 兼容 LLM 两种七要素写法（60 条要素 98% 中文）
 - **0.3.5/0.3.6**（2026-09-28）：Checkpoint 1 收敛为单一产物 —— layout_preview.html 同时展示排版 + 分镜意图

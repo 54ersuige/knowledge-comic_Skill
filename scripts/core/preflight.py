@@ -528,9 +528,32 @@ def _f_no_text_decl(p: dict) -> list[Finding]:
 # 需要多个弱信号同现，或与强信号器物词同现，才判定为穿帮。
 _WEAK_ANACHRONISM = {"繁复", "华丽"}
 
-_NEGATION_CUES = ("no ", "not ", "without", "free of", "zero ", "absence of",
-                 " devoid of", "never ", "avoid ", "none of", "rather than",
-                 "instead of", "not any", "no-")
+_NEGATION_CUES = ("no", "not", "without", "free of", "zero", "absence of",
+                 "devoid of", "never", "avoid", "none of", "rather than",
+                 "instead of", "not any")
+
+# 可穿越的连接符 —— 否定线索和被检词之间隔着这些字符时，
+# 否定作用域仍然成立。男性锚点写的是 "(NOT 步摇 — too feminine)"，
+# 否定词与被检词之间隔着左括号，裸 in 匹配不到。
+_NEG_CONNECTORS = set(" \t\n()[]{},;:-—–/\\\"'")
+
+# 否定线索到被检词之间最多允许隔多少字符（防止否定作用域无限延伸，
+# 把几百字符前的 NOT 误配给后面的词）
+_NEG_MAX_GAP = 40
+
+
+def _negated_before(text_lower: str, i: int) -> bool:
+    """位置 i 之前是否处于否定作用域内。"""
+    window = text_lower[max(0, i - _NEG_MAX_GAP):i]
+    # 从右往左扫，遇连接符继续，遇非连接符的实词终止
+    for cue in _NEGATION_CUES:
+        pos = window.rfind(cue)
+        if pos < 0:
+            continue
+        between = window[pos + len(cue):]
+        if all(ch in _NEG_CONNECTORS for ch in between):
+            return True
+    return False
 
 
 def _positive_mention(text: str, word: str) -> bool:
@@ -538,17 +561,22 @@ def _positive_mention(text: str, word: str) -> bool:
 
     p09 的 `no calligraphy, no symbols` 是零文字声明的一部分 —— 正确写法。
     只做子串匹配会把这种否定用法误判成"诱导画字"（v0.3.15 初版就踩了）。
-    判据：看该词前 ~30 字符里有没有否定线索词。
+
+    v0.3.20 修两个真实缺陷：
+      1. cue 表原为小写，原文写大写 `NOT` / `NO` 时匹配不上
+      2. 否定线索与被检词之间可以隔着标点/括号（男性锚点："(NOT 步摇 ...)"），
+         裸 `in` 匹配不到 —— 现在按「否定词 + 只隔连接符」判定
     """
+    low = text.lower()
+    w = word.lower()
     start = 0
     while True:
-        i = text.find(word, start)
+        i = low.find(w, start)
         if i < 0:
             return False
-        before = text[max(0, i - 30):i]
-        if not any(cue in before for cue in _NEGATION_CUES):
+        if not _negated_before(low, i):
             return True
-        start = i + len(word)
+        start = i + len(w)
 
 # 会诱导模型在图上画字的词 —— planner 铁律 4 明令禁止
 TEXT_INVITING_WORDS = [
@@ -558,6 +586,49 @@ TEXT_INVITING_WORDS = [
 ]
 
 
+
+def _f_char_gender(storyboard, p: dict) -> list[Finding]:
+    """characters[].gender 缺失 → 阻塞（全文级报一次）。
+
+    **事故依据**（kc_1790664590）：夫差没写 gender，角色参考图被画成女性
+    （桃花腮/柳叶眉/步摇簪花），再经 i2i 传进每一页。
+    角色参考图是整条链路的**性别源头**，源头错了全批都错。
+
+    注意：`resolve_gender()` 有 KNOWN_GENDER 兜底表，知名正史人物能自动
+    判对。但 planner 是动态生成角色的，遇到库外名字就只剩文本线索猜测，
+    约 70% 可靠 —— 对一个会污染全部页面的源头字段，70% 不够。
+    """
+    if p["page"] != 1:
+        return []
+    chars = p.get("characters") or []
+    if not chars:
+        return []
+    missing = []
+    for c in chars:
+        nm = c.get("name") if isinstance(c, dict) else c
+        g = (c.get("gender") if isinstance(c, dict) else "") or ""
+        g = g.strip().lower()
+        if g not in ("male", "female", "mixed"):
+            # KNOWN_GENDER 兜底能判出的不报（那是确定能对的）。
+            # 注意：**必须查表本身**，不能调 resolve_gender ——
+            # 它对任何名字都返回非空（默认 male），会把这个检查彻底架空，
+            # 「库外人物缺 gender」永远判成"能判"→ 永不阻塞。
+            # （测试直接打脸过这个 bug。）
+            try:
+                from scripts.core.prompts import KNOWN_GENDER
+                if (nm or "") in KNOWN_GENDER:
+                    continue
+            except Exception:
+                pass
+            missing.append(nm)
+    if missing:
+        return [Finding(
+            None, "block", "CHAR_GENDER_MISSING",
+            f"角色缺 gender 字段：{missing}",
+            "性别决定角色参考图的面部锚点，参考图经 i2i 传进每一页 —— "
+            "源头错了全批都错。实测 kc_1790664590：夫差被画成女性，"
+            "污染全部含他的页面。补 characters[].gender = 'male'/'female'")]
+    return []
 
 def _f_era_anachronism(storyboard, p: dict) -> list[Finding]:
     """角色 visual_signature 含后世器物 → 阻塞（**全文级报一次**）。
@@ -720,6 +791,7 @@ def run_preflight(storyboard, alignment: dict | None = None) -> PreflightResult:
         res.findings.extend(_f_fabricated(p, allowed))
         res.findings.extend(_f_no_text_decl(p))
         res.findings.extend(_f_ragged_needs_plain(p))
+        res.findings.extend(_f_char_gender(storyboard, p))
         res.findings.extend(_f_era_anachronism(storyboard, p))
         res.findings.extend(_f_no_text_missing(p))
         res.findings.extend(_f_punchline(p))
