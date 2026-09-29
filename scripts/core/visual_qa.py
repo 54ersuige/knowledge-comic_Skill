@@ -11,9 +11,10 @@
   1. **宁可漏报也不误报** —— LLM 视觉判断本身有方差，所以每条 finding 带
      `confidence`，只有高置信度才升级为 block。低置信度一律 warn，且
      提示人工复核。**绝不让不可靠的自动判断拦住用户的流程**。
-  2. **不阻塞主流程** —— 审核失败（网络/超时/模型报错）绝不抛异常打断跑图，
+  2. **低置信不报**（<0.6 直接丢弃）—— 实跑证明 40-50% 的 warn 是噪声。
+  3. **不阻塞主流程** —— 审核失败（网络/超时/模型报错）绝不抛异常打断跑图，
      降级为一条 warn。审核是辅助，不是单点。
-  3. **逐页串行** —— 并发会打爆配额且难以归因哪张图对应哪条 finding。
+  4. **逐页串行** —— 并发会打爆配额且难以归因哪张图对应哪条 finding。
 
 **与 preflight 的分工**：
   preflight 查"描述写得对不对"（跑图前，0 成本）
@@ -34,6 +35,11 @@ logger = logging.getLogger(__name__)
 # 低于此值一律 warn，理由：LLM 视觉判断有方差，误报的代价（用户开始无视
 # 整个审核层）远大于漏报。
 BLOCK_CONFIDENCE = 0.85
+
+# 低于这个置信度的 finding **根本不报**。实跑证明 40-50% 的 warn 没有
+# 信息量（"未体现坟墓白骨意象"是主观解读，不是可判定事实）——
+# 报出来只会训练用户忽略警告。
+WARN_CONFIDENCE = 0.6
 
 # 画风锚点：每种风格问 LLM 的判定问题不同。
 # 只问**能被单图回答**的问题，不问需要跨页对比的问题（单图看不出来）。
@@ -259,28 +265,30 @@ def audit_page(img_path: Path, page: dict, style_id: str) -> list[VisualFinding]
             c_style, ev))
 
     # --- 人物性别（p9 常惠事故的通用形态）---
+    #
+    # v0.3.16 删除 PEOPLE_COUNT：实跑 10 页 2/2 全是误报。
+    # 根因是 `_expected_genders()` 数的是 `[GENDER:xx]` 标记数，而 bible 式
+    # 写法整页只有一个标记覆盖所有角色 —— 拿标记数当"预期人数"，基准就是错的。
+    # p03「7 人 vs 预期 1 人」尤其荒谬：连环画铁律本来就要求 3+ 人。
+    #
+    # 只保留 GENDER_WRONG —— 它是**方向性**判据（要求男性却把唯一角色画成
+    # 女性），不依赖人数基准，所以没有这个问题。
     expected = _expected_genders(page)
     people = data.get("people") or []
     if isinstance(people, list):
-        got = [str(p.get("gender", "unclear")).lower()
-               for p in people if isinstance(p, dict)]
-        n_exp, n_got = len(expected), len(got)
-        if n_exp and n_got and n_got != n_exp:
-            conf = 0.6
-            out.append(VisualFinding(
-                pg_no, "warn", "PEOPLE_COUNT",
-                f"画面 {n_got} 人，描述预期 {n_exp} 人"
-                f"（描述要求 {'/'.join(expected)}）", conf, ev))
+        got = [str(x.get("gender", "unclear")).lower()
+               for x in people if isinstance(x, dict)]
         fem = sum(1 for g in got if g == "female")
-        exp_fem = expected.count("female")
-        if expected and n_exp == 1 and exp_fem == 0 and fem == 1:
+        if len(expected) == 1 and expected[0] == "male" and len(got) == 1 and fem == 1:
             out.append(VisualFinding(
                 pg_no, "block", "GENDER_WRONG",
-                "描述要求男性，图里画成了女性", 0.9, ev))
+                "描述要求男性，图里唯一的角色被画成了女性", 0.9, ev))
 
     # --- 图画不符 ---
+    # 只在 >= WARN_CONFIDENCE 时报。低置信的"未体现 X 意象"是主观解读，
+    # 不是可判定事实 —— 实跑里 p10 那条 40% 就是这种噪声。
     ok, c_note = _norm_pair(data.get("note_consistent"))
-    if not ok:
+    if not ok and c_note >= WARN_CONFIDENCE:
         level = "block" if c_note >= BLOCK_CONFIDENCE else "warn"
         out.append(VisualFinding(
             pg_no, level, "NOTE_MISMATCH",

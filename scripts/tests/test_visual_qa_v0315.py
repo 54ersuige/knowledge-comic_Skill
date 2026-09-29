@@ -125,6 +125,46 @@ def test_prompt_safety() -> None:
     check("连环画风格问题在", "lianhuanhua" in prompt)
 
 
+
+def test_people_count_removed() -> None:
+    """PEOPLE_COUNT 已删除，且不许被加回来（v0.3.16 实跑 2/2 误报）。"""
+    print("\n[8] PEOPLE_COUNT 已删除（实跑打脸）")
+    src = (ROOT / "scripts" / "core" / "visual_qa.py").read_text(encoding="utf-8")
+    check("源码无 PEOPLE_COUNT 判定",
+          '"PEOPLE_COUNT"' not in src)
+    # 保留的那条必须还在
+    check("GENDER_WRONG 仍在", '"GENDER_WRONG"' in src)
+    # 方向性判据：只要求单男性时画出女性才报
+    check("GENDER_WRONG 用方向判据",
+          'expected[0] == "male"' in src and "len(got) == 1" in src)
+
+
+def test_gender_wrong_direction() -> None:
+    """GENDER_WRONG 只在方向明确时报，不依赖人数基准。"""
+    print("\n[9] GENDER_WRONG 方向判据")
+    single_male = {"visual": "Character bible: Su Wu ... [GENDER:male] ..."}
+    check("单人男性页标记数=1", vq._expected_genders(single_male) == ["male"])
+    # bible 式双角色只有 1 个标记 —— 这正是 PEOPLE_COUNT 失效的原因
+    two_actors = {"visual": "Character bible: Su Wu ... [GENDER:male] ... "
+                            "Midground: Li Ling and Su Wu sitting opposite"}
+    check("bible 式双角色仍只有 1 标记",
+          len(vq._expected_genders(two_actors)) == 1,
+          "这证明标记数 != 人物数，PEOPLE_COUNT 基准不成立")
+    mixed = {"visual": "[GENDER:female] A: woman. [GENDER:male] B: man."}
+    check("前缀式多角色标记数=2", vq._expected_genders(mixed) == ["female", "male"])
+
+
+def test_warn_confidence_floor() -> None:
+    """低于 WARN_CONFIDENCE 的 finding 根本不报（v0.3.16）。"""
+    print("\n[10] 低置信噪声过滤")
+    check("WARN_CONFIDENCE 已定义", hasattr(vq, "WARN_CONFIDENCE"))
+    check("门槛 = 0.6", vq.WARN_CONFIDENCE == 0.6)
+    check("门槛低于 block 门槛",
+          vq.WARN_CONFIDENCE < vq.BLOCK_CONFIDENCE)
+    src = (ROOT / "scripts" / "core" / "visual_qa.py").read_text(encoding="utf-8")
+    check("NOTE_MISMATCH 用门槛过滤",
+          "c_note >= WARN_CONFIDENCE" in src)
+
 def main() -> int:
     test_parser()
     test_norm_pair()
@@ -133,6 +173,9 @@ def main() -> int:
     test_page_no_parsing()
     test_report_shapes()
     test_prompt_safety()
+    test_people_count_removed()
+    test_gender_wrong_direction()
+    test_warn_confidence_floor()
 
     print(f"\n{'=' * 52}")
     print(f"passed {len(_passed)} / {len(_passed) + len(_failed)}")

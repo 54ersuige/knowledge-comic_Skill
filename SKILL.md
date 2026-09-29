@@ -4,7 +4,7 @@ description: Knowledge comic generator that turns a topic + bullet list into a p
 version: 0.3.8
 ---
 
-# Knowledge Comic (WeChat MP) — v0.3.8
+# Knowledge Comic (WeChat MP) — v0.3.16
 
 把「主题 + 要点」变成可一键发布到公众号草稿箱的知识漫画图文。**端到端在 Mavis 对话里逐步执行 + 用户拍板**。
 
@@ -40,6 +40,84 @@ python guide.py "张巡守睢阳"   # 中文主题
 ```
 
 返回 JSON：`{"style_id": "chinese_lianhuanhua_classic", "template_id": "c", "alternates": [...], "rationale": "..."}`
+
+## v0.3.16 / v0.3.15 核心变化（2026-09-28，两道自动关卡）
+
+**背景**：苏武牧羊项目跑了 4 天，挖出的 bug 绝大多数是**静默失败** ——
+不报错、行为与预期不符，跑完才发现。v0.3.15/16 的目的不是"零错误"，
+而是**把静默失败变成可见的**，第一次就拦住，不烧图、不烧额度。
+
+### 关卡 1：生图前体检（preflight，阻塞）
+
+`step_gen_images` 开头自动跑，位置在角色参考图**之前**（那里开始就烧钱）。
+有阻塞项则 `SystemExit(1)`，**一张图都不跑**。
+
+```python
+# 独立体检（改完 storyboard.json 后先验一遍，不跑图）
+from scripts.run import step_preflight_images
+r = step_preflight_images(job_id)
+print(r["report"])   # {"blocked": bool, "blocks": [...], "warns": [...]}
+```
+
+9 类检查：
+
+| code | 级别 | 拦什么 |
+|---|---|---|
+| `KW_EMPTY` | 阻塞 | keywords 为空 → 朱砂高亮整条链路失效 |
+| `HEDGING` | 阻塞 | 正文含「（或…）」「（实际为…）」→ LLM 不确定时的自我暴露 |
+| `BODY_LONG` | 阻塞 | 正文 > 170 字（文字会压过画面） |
+| `TEXT_INVITING` | 阻塞 | visual 含 calligraphy/inscribed/banner → 模型会当真画字 |
+| `NAME_UNKNOWN` | 建议 | 带身份头衔却不在正史表 → 疑似编造人物 |
+| `GENDER_PARTIAL` | 阻塞 | 前缀式多角色页有段漏标 `[GENDER]`（p9 常惠事故） |
+| `GENDER_NONE` | 建议 | 无性别标记且角色未登记进 `characters[]` |
+| `RAGGED_NO_PLAIN` | 建议 | 衣物写破损但无 `PLAIN unadorned` → 出字风险 |
+| `MODERN_TONE` | 建议 | 「极限测试」「破防」等现代口水词 |
+
+逃生阀：`step_gen_images(job_id, skip_preflight=True)`（用户确认要硬跑时才用）。
+
+### 关卡 2：跑图后视觉审核（visual_qa，不阻塞）
+
+`step_gen_images` 跑完图自动跑（`auto_visual_qa=True`）。
+用 LLM 视觉能力逐页看图，查**只能看图才知道**的问题：
+`TEXT_ON_IMAGE` / `STYLE_DRIFT` / `GENDER_WRONG` / `PEOPLE_COUNT` / `NOTE_MISMATCH`。
+
+```python
+from scripts.run import step_visual_qa
+r = step_visual_qa(job_id)              # 全审
+r = step_visual_qa(job_id, pages=[4,8]) # 只复审某几页
+```
+
+**刻意不阻塞**，与关卡 1 定位不同：
+
+| | 关卡 1 preflight | 关卡 2 visual_qa |
+|---|---|---|
+| 时机 | 跑图**前** | 跑图**后** |
+| 对象 | 输入（描述写得对不对） | 输出（图画得对不对） |
+| 确定性 | **确定**的规则违反 | **概率性**的 LLM 判断 |
+| 处置 | 阻塞 SystemExit(1) | 只打印报告，用户拍板 |
+| 成本 | 0 | token + 时间 |
+
+理由：preflight 拦的是确定的错误，可以拦；LLM 视觉判断有方差，
+拦不住就只会变成"狼来了"。且只有 confidence ≥ 0.85 才升级为 block。
+
+**实机验证抓到了用户验收时漏掉的真 bug**：
+审 kc_1790586703 时 LLM 对 p04 报 95% 置信 `TEXT_ON_IMAGE`，
+肉眼复核确认苏武破袍上画满伪汉字 —— 用户当初只看了画风和构图，
+没放大看衣物。p01 干净无字、未报（无误报）。
+**图上出字是本项目最常复发的 bug，而它肉眼容易漏** —— 这就是这层的价值。
+
+### ⚠️ 能力边界（不回避）
+
+这两道关卡**不能保证**以下问题被发现：
+
+- **语义层面的史实错误** —— 把 A 的事迹安到 B 头上、年份写错、因果搞反。
+  preflight 只能拦 hedging 和编造人名**结构**，语义错还得人核。
+- **画风漂移** —— 图像有固有方差，即使 prompt 完全正确仍有 10-20% 漂移率，
+  无法消除，只能检出。
+- **LLM 内容质量** —— 史实、遣词、逻辑依然依赖 planner 的一次发挥。
+
+所以流程仍然是**用户拍板制**（见下方"用户主导"）。关卡是把
+"跑完才发现"变成"当场发现"，不是把用户从流程里拿掉。
 
 ## v0.3.8 核心变化（2026-09-28，排版结构化定版）
 
@@ -277,10 +355,14 @@ python guide.py "张巡守睢阳"   # 中文主题
 
 ```python
 from scripts.run import (
-    step_plan,           # → (storyboard, job_id, work_dir)
-    step_gen_images,     # → [Path, ...] PNG（regenerate_pages=[N,...] 单页重跑）
-    step_render_article, # → html_path（template_id=None 自动用 storyboard 推荐）
-    step_publish_draft,  # → {"draft_media_id": ..., ...}（template_id=None 自动用推荐）
+    step_plan,              # → (storyboard, job_id, work_dir)
+    step_gen_images,        # → [Path, ...] PNG（regenerate_pages=[N,...] 单页重跑）
+    step_render_article,    # → html_path（template_id=None 自动用 storyboard 推荐）
+    step_publish_draft,     # → {"draft_media_id": ..., ...}（template_id=None 自动用推荐）
+    step_preflight_images,  # v0.3.15 生图前体检（不跑图）
+    step_visual_qa,         # v0.3.16 跑图后视觉审核（不跑图）
+    step_story_script,      # v0.3.5 分镜要素抽取
+    step_layout_preview,    # v0.3.5 排版+分镜审阅页
 )
 
 sb, job_id, work_dir = step_plan(
@@ -298,6 +380,10 @@ sb, job_id, work_dir = step_plan(
 image_paths = step_gen_images(job_id)  # 全跑。v0.2.5: 如果 step_plan 传了 characters，会先跑角色 4 视图参考图 + 用 i2i 跑每页
 # 或：image_paths = step_gen_images(job_id, regenerate_pages=[10, 11])  # 只重画
 # 或：image_paths = step_gen_images(job_id, auto_char_refs=False)  # 跳过角色参考（用纯 t2i 跑）
+# v0.3.15/16：step_gen_images 前后各有一道自动关卡
+#   前：preflight 体检，有阻塞项直接 SystemExit(1)，一张图不跑
+#   后：visual_qa 视觉审核，只打印报告不阻塞
+# 开关：skip_preflight=True（逃生阀）/ auto_visual_qa=False（关掉后审）
 
 html_path = step_render_article(job_id)  # template_id=None 自动用 storyboard.json 里 recommended_template
 
