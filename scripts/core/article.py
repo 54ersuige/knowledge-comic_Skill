@@ -621,18 +621,26 @@ def render_template_c(inp: ArticleInput) -> str:
             if quote:
                 # 转义后保留换行（多句原文分行显示）
                 q_html = _esc(quote).replace("\n", "<br/>")
+                # v0.3.13：双层蒙版
+                #   下层：半透明实底色板（高度按文字区固定 86px，容纳 padding+两行）
+                #   上层：渐变过渡（0 → 半透明），做视觉过渡，避免生硬切口
+                # 单靠渐变在**浅色图**上（如 p3 雪地、p10 枯柳冬景）仍然偏透，
+                # 白色楷体压在米白雪地上读不清 —— 加一层实底才稳。
                 mask = (
+                    # 下层：实底色板
+                    f'<div style="position:absolute;left:0;right:0;bottom:0;'
+                    f'height:86px;background:rgba(28,22,16,0.52);"></div>'
+                    # 上层：渐变过渡
                     f'<div style="position:absolute;left:0;right:0;bottom:0;'
                     f'padding:54px 18px 16px 18px;'
                     f'background:linear-gradient(180deg,'
                     f'rgba(24,18,12,0) 0%,'
-                    f'rgba(24,18,12,0.18) 34%,'
-                    f'rgba(24,18,12,0.62) 72%,'
-                    f'rgba(24,18,12,0.80) 100%);">'
+                    f'rgba(24,18,12,0.30) 45%,'
+                    f'rgba(24,18,12,0.55) 100%);">'
                     f'<p style="margin:0;font-family:STKaiti,KaiTi,楷体,serif;'
-                    f'font-size:16px;line-height:27px;color:#f7f2e8;'
+                    f'font-size:16px;line-height:27px;color:#faf6ec;'
                     f'letter-spacing:1.5px;line-break:strict;'
-                    f'text-shadow:0 1px 4px rgba(0,0,0,0.75),0 0 12px rgba(0,0,0,0.5);">'
+                    f'text-shadow:0 1px 4px rgba(0,0,0,0.85),0 0 14px rgba(0,0,0,0.6);">'
                     f'{q_html}</p></div>'
                 )
             else:
