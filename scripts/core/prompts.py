@@ -40,6 +40,48 @@ ZERO_TEXT_BOOST = (
     "NO speech bubbles. NO caption boxes. NO watermarks. NO labels. NO arrows-with-words."
 )
 
+# === v0.3.18 代码层注入的三条硬约束 ===============================
+# 设计依据：写在 planner prompt 里的祈使句**不可靠**（苏武那批遵守、
+# 卧薪尝胆 10/10 页全没遵守）。ZERO_TEXT_BOOST 无条件注入才一直有效，
+# 所以这三条照它的成功配方改成代码注入 —— LLM 漏不掉。
+#
+# 1) 纹样抑制：ZERO_TEXT_BOOST 管"别写字"，但管不住"别画纹样"——
+#    实测 kc_1790586703 p04/p07、kc_1790664590 p01/p02/p06/p08/p09
+#    袍上全是伪汉字，根因是描述里有 tattered/繁复/华丽/丝绸 这类
+#    邀请纹样的词。要正面写"素面"才按得住。
+PATTERN_SUPPRESS = (
+    "Every garment and surface must be COMPLETELY BLANK: solid flat colour "
+    "with no pattern, no motif, no embroidery, no brocade, no ornament, "
+    "no trim, no decoration of any kind. No woven decoration, no printed "
+    "design, no symbolic marks. Fabric is plain and unadorned like unbleached "
+    "hemp or raw silk. Even worn or torn cloth shows plain weave only, never "
+    "decorative texture or pseudo-script."
+)
+
+# 2) 连环画强锚：实测 10/10 页 visual 没有任何画风词，全靠 style.prompt_en
+#    兜底，不够稳。单人构图 + 现代器物一进来就漂成 3D/宋画。
+LIANHUANHUA_STYLE_LOCK = (
+    "CRITICAL STYLE: every single element of this frame must be a classical "
+    "Chinese lianhuanhua (连环画) brush painting on aged rice paper, in the "
+    "Dai Dunbang / He Youzhi tradition. Flat mineral pigment washes, visible "
+    "brush linework, paper grain and fibre texture showing through, muted "
+    "earth palette of ochre / malachite / cinnabar / ink black on cream. "
+    "NOT a photograph, NOT a 3D render, NOT anime, NOT modern digital "
+    "illustration, NOT glossy CG, NOT a Song/Ming/Qing court painting, "
+    "NOT photorealistic. If any part of the image looks photographic or "
+    "renders in 3D, the whole image has failed."
+)
+
+# 3) 时代穿帮词：用于 preflight 检测 characters[].visual_signature
+#    是否被 planner 写成了后世帝王形象（实测夫差被写成"华丽丝绸+金质发冠"，
+#    春秋吴王每页都画成明清帝王）。这些是**检测用**的表，不进 prompt。
+ANACHRONIC_MARKERS = [
+    "金质发冠", "玉璧", "龙袍", "龙纹", "补子", "乌纱", "乌纱帽", "官帽",
+    "朝服", "蟒袍", "雕龙", "织金", "点绣", "补服", "顶戴", "翎羽", "朝珠",
+    "紫砂", "扶手椅", "沙发", "玻璃窗", "油灯", "蜡烛", "机械钟", "折扇",
+    "繁复", "华丽",
+]
+
 # === 中国画构图 booster（替代 cinematic 三件套） ===
 # v0.2.5 (2026-09-22)：历史典故类风格 (chinese_lianhuanhua_classic / cn_xuanfeng / guochao_manhua)
 # 必须用中国画构图语言（散点透视/留白/平面色块/白描+朱砂勾线），不能用西方镜头语言，
@@ -721,6 +763,8 @@ def build_image_prompt(
         f"{style_lock_repeat}"
         f"Scene: {scene_description} "
         f"{composition_boost} "
+        f"{LIANHUANHUA_STYLE_LOCK} "
+        f"{PATTERN_SUPPRESS} "
         f"{ZERO_TEXT_BOOST} "
         f"Avoid: {negative}"
     )

@@ -27,6 +27,17 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+# v0.3.18：时代穿帮词表（从 prompts.py 拿，同一份避免两处漂移）
+try:
+    from scripts.core.prompts import ANACHRONIC_MARKERS
+except Exception:  # pragma: no cover - 独立运行时的兜底
+    ANACHRONIC_MARKERS = [
+        "金质发冠", "玉璧", "龙袍", "龙纹", "补子", "乌纱", "官帽",
+        "朝服", "蟒袍", "雕龙", "织金", "点绣", "补服", "顶戴", "翎羽",
+        "朝珠", "紫砂", "扶手椅", "沙发", "玻璃窗", "油灯", "蜡烛",
+        "机械钟", "折扇", "繁复", "华丽",
+    ]
+
 # 正史/权威典籍常见人名 —— 出现**不在**这个集合里、且也不在 storyboard
 # 自定义角色里的中文人名，标为"疑似编造"（宁可误报也不漏报，误报可人工确认）
 KNOWN_HISTORICAL_NAMES = {
@@ -512,6 +523,11 @@ def _f_no_text_decl(p: dict) -> list[Finding]:
 
 
 
+
+# 弱信号：这些词单独出现时可能只是形容神态/气质，不是器物穿帮。
+# 需要多个弱信号同现，或与强信号器物词同现，才判定为穿帮。
+_WEAK_ANACHRONISM = {"繁复", "华丽"}
+
 _NEGATION_CUES = ("no ", "not ", "without", "free of", "zero ", "absence of",
                  " devoid of", "never ", "avoid ", "none of", "rather than",
                  "instead of", "not any", "no-")
@@ -543,6 +559,80 @@ TEXT_INVITING_WORDS = [
 
 
 
+def _f_era_anachronism(storyboard, p: dict) -> list[Finding]:
+    """角色 visual_signature 含后世器物 → 阻塞（**全文级报一次**）。
+
+    **实测事故**（kc_1790664590）：夫差签名写「华丽的红白相间宽袖丝绸袍服、
+    佩戴玉璧和繁复的金质发冠」—— 春秋吴王没有这些。模型忠实照画，
+    结果每一页画到夫差都成了明清帝王（肥胖、金冠、锦袍）。
+
+    这与 RAGGED_NO_PLAIN 不同：那个是风险因子（p04 中招 p08 没中招），
+    这个是**确凿的史实错误**，且在 i2i 模式下会污染所有含该角色的页面。
+
+    **报一次而不是每页一次**：角色签名是 storyboard 级的问题，
+    逐页报会得到 10 条一模一样的阻塞（v0.3.15 的 GENDER 检查犯过同样的错）。
+    这里 page=None + msg 里列出受影响页号。
+    """
+    if p["page"] != 1:
+        return []                      # 只在第 1 页跑一次，汇总到全文级
+
+    chars = p.get("characters") or []
+    if not chars:
+        return []
+    # 哪些页提到了这个角色
+    pages_by_char: dict[str, list[int]] = {}
+    for c in chars:
+        nm = c.get("name") if isinstance(c, dict) else c
+        if not nm:
+            continue
+        hits_pages = [pg["page"] for pg in _ALL_PAGES
+                      if nm in (pg.get("visual") or "")
+                      or nm in (pg.get("caption") or "")]
+        if hits_pages:
+            pages_by_char[nm] = hits_pages
+
+    out = []
+    for c in chars:
+        nm = c.get("name") if isinstance(c, dict) else c
+        sig = (c.get("visual_signature", "") if isinstance(c, dict) else "") or ""
+        # v0.3.18：用 _positive_mention 过滤否定语境 ——
+        # 苏武签名里的「无繁复纹样」是最合规的写法，不能被「繁复」命中。
+        hits = [w for w in ANACHRONIC_MARKERS if _positive_mention(sig, w)]
+        # 「繁复/华丽」是弱信号：单独出现时可能只是形容神态，
+        # 只有与**器物**同现（"华丽的丝绸袍" vs "神情华丽"）才算穿帮。
+        weak = [w for w in hits if w in _WEAK_ANACHRONISM]
+        strong = [w for w in hits if w not in _WEAK_ANACHRONISM]
+        if not strong and len(weak) < 2:
+            continue
+        hits = strong + weak[:1]
+        affected = pages_by_char.get(nm, [])
+        where = f"影响 {len(affected)} 页" if affected else "暂未出现在画面"
+        out.append(Finding(
+            None, "block", "ERA_ANACHRONISM",
+            f"角色「{nm}」的视觉签名含后世器物 {hits}（{where}）",
+            "先秦人物不该有金质发冠/玉璧/龙纹/繁复织锦 —— 模型会忠实照画。"
+            "实测 kc_1790664590：夫差被画成明清帝王，每页都错。"
+            "改成素麻/葛布/深色圆领袍 + 发束高髻缠布带这类本时代形制"))
+    return out
+
+
+def _f_no_text_missing(p: dict) -> list[Finding]:
+    """visual 没写零文字声明 → **建议**（代码层已兜底，这里只提示）。
+
+    为什么不是阻塞：`prompts.py:PATTERN_SUPPRESS` + `ZERO_TEXT_BOOST`
+    已经无条件注入，漏写 visual 不会掉出保护。但这仍是 planner 忽略铁律的
+    信号 —— 而忽略铁律往往连带其他问题（如本批 10/10 页也没有画风词），
+    所以报出来给 Mavis 看，但**不阻塞**。
+    """
+    v = (p.get("visual") or "").upper()
+    if "NO TEXT" not in v and "NO WRITING" not in v:
+        return [Finding(p["page"], "warn", "NO_TEXT_MISSING",
+                        "visual 未写零文字声明（代码层已兜底，但 planner 可能忽略了整条铁律）",
+                        "实测 kc_1790664590：10/10 页都没写，其中 6 页袍上出了伪字。"
+                        "建议 visual 末尾加 STRICT NO TEXT —— no characters, "
+                        "no calligraphy, no symbols, plain fabric only")]
+    return []
+
 def _f_punchline(p: dict) -> list[Finding]:
     out = []
     pl = (p.get("punchline") or "").strip()
@@ -567,6 +657,11 @@ def _f_dialogue(p: dict) -> list[Finding]:
 
 
 # --- 主入口 -----------------------------------------------------------------
+
+# v0.3.18：_f_era_anachronism 需要跨页汇总（哪些页提到某角色），
+# 用模块级缓存挂一次 —— 纯读取，不跨调用复用。
+_ALL_PAGES: list[dict] = []
+
 
 def run_preflight(storyboard, alignment: dict | None = None) -> PreflightResult:
     """跑完整体检。
@@ -613,6 +708,9 @@ def run_preflight(storyboard, alignment: dict | None = None) -> PreflightResult:
         d["characters"] = characters      # _named_roles 靠它识别已登记角色
         pages.append(d)
 
+    global _ALL_PAGES
+    _ALL_PAGES = pages
+
     for p in pages:
         res.findings.extend(_f_kw(p))
         res.findings.extend(_f_body_len(p))
@@ -622,6 +720,8 @@ def run_preflight(storyboard, alignment: dict | None = None) -> PreflightResult:
         res.findings.extend(_f_fabricated(p, allowed))
         res.findings.extend(_f_no_text_decl(p))
         res.findings.extend(_f_ragged_needs_plain(p))
+        res.findings.extend(_f_era_anachronism(storyboard, p))
+        res.findings.extend(_f_no_text_missing(p))
         res.findings.extend(_f_punchline(p))
         res.findings.extend(_f_dialogue(p))
 

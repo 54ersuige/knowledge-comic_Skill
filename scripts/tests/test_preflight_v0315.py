@@ -73,9 +73,13 @@ def test_real_job_clean() -> None:
     r = run_preflight(sb)
     check("0 阻塞项", not r.blocked,
           f"blocks={[f.code for f in r.blocks]}")
-    # 曾经误报的两个 code 必须彻底消失
-    check("无误报 NO_TEXT_MISSING", "NO_TEXT_MISSING" not in codes(r))
+    # GENDER_PARTIAL 曾经 10/10 误报，必须彻底消失
     check("无误报 GENDER_PARTIAL", "GENDER_PARTIAL" not in codes(r))
+    # v0.3.18：NO_TEXT_MISSING 语义已变（从"缺声明=风险"改成
+    # "planner 忽略了整条铁律的信号"），代码层已兜底所以只能是 warn。
+    # 苏武这批 9/10 页没写声明，但图基本干净 —— 正说明它不能当阻塞项。
+    check("NO_TEXT_MISSING 不再是阻塞项", "NO_TEXT_MISSING" not in
+          {f.code for f in r.blocks})
     # 0 字节图静默污染的变体：pages 为空时不能崩
     empty = run_preflight({"style_id": STYLE, "pages": [], "characters": []})
     check("空 pages 不崩", empty is not None)
@@ -224,6 +228,56 @@ def test_dialogue_rule_is_mandatory() -> None:
           "每页必填" in PLANNER_SYSTEM_PROMPT.split('"pages"')[-1][:800])
     check("给出题材范例", "苦身焦思" in PLANNER_SYSTEM_PROMPT)
 
+
+def test_era_anachronism() -> None:
+    """时代穿帮检测 + 否定语境（v0.3.18）。"""
+    print("\n[8] 角色时代穿帮（v0.3.18）")
+    sb = base_sb()
+    sb["characters"] = [
+        {"name": "苏武", "role": "主角",
+         "visual_signature": "深灰长袍（粗麻质感，**无繁复纹样**），黑色平巾帻"},
+        {"name": "夫差", "role": "反派",
+         "visual_signature": "华丽的红白相间宽袖丝绸袍服，佩戴玉璧和繁复的金质发冠"},
+    ]
+    r = run_preflight(sb)
+    era = [f for f in r.findings if f.code == "ERA_ANACHRONISM"]
+    check("抓到夫差的穿帮描述", len(era) == 1, str([f.msg for f in era]))
+    check("报的是全文级（page=None）", era and era[0].page is None)
+    check("是阻塞项", era and era[0].level == "block")
+    check("msg 点名夫差", era and "夫差" in era[0].msg)
+    check("没误报苏武（否定语境：无繁复纹样）",
+          era and "苏武" not in era[0].msg)
+
+    # 干净的签名不该报
+    sb2 = base_sb()
+    sb2["characters"] = [
+        {"name": "勾践", "role": "主角",
+         "visual_signature": "削瘦挺拔，素麻深色圆领短袍，发束高髻缠青色布带，"
+                             "赤足草履，无玉佩无纹饰"},
+    ]
+    r2 = run_preflight(sb2)
+    check("干净签名不报", "ERA_ANACHRONISM" not in codes(r2))
+
+    # 弱信号单独出现不报
+    sb3 = base_sb()
+    sb3["characters"] = [{"name": "文种", "role": "配角",
+                          "visual_signature": "面容消瘦，气质坚毅华贵，葛麻官袍"}]
+    check("单��弱信号不报", "ERA_ANACHRONISM" not in codes(run_preflight(sb3)))
+
+
+def test_code_level_boosts_injected() -> None:
+    """三条 boost 必须无条件进 prompt（LLM 漏不掉）。"""
+    print("\n[9] 代码层 boost 注入（v0.3.18 核心）")
+    from scripts.core.prompts import build_image_prompt
+    p = build_image_prompt("chinese_lianhuanhua_classic",
+                           "A man in a tattered robe kneels in snow.")
+    check("PATTERN_SUPPRESS 已注入", "COMPLETELY BLANK" in p)
+    check("LIANHUANHUA_STYLE_LOCK 已注入", "lianhuanhua" in p.lower())
+    check("明确排除 3D/照片", "NOT a photograph" in p and "NOT a 3D render" in p)
+    check("排除宋明清院画", "Song/Ming/Qing" in p)
+    check("ZERO_TEXT_BOOST 仍在", "NO TEXT" in p)
+    check("长度未超 Agnes 上限", len(p) < 9800, f"len={len(p)}")
+
 def main() -> int:
     test_real_job_clean()
     test_injected_faults()
@@ -232,6 +286,8 @@ def main() -> int:
     test_seven_element_not_actor()
     test_pinyin_character_recognized()
     test_dialogue_rule_is_mandatory()
+    test_era_anachronism()
+    test_code_level_boosts_injected()
 
     print(f"\n{'=' * 52}")
     print(f"passed {len(_passed)} / {len(_passed) + len(_failed)}")
