@@ -610,7 +610,11 @@ def render_template_c(inp: ArticleInput) -> str:
 
         # 图 + 图下文言蒙版（v0.3.11）
         # 用户原话：「文言文要集成在图片中，在图片的下方，用类似蒙版的效果集成在图片上」
-        # 结构：图位是一个相对定位容器，<img> 在底层，文言引文用半透明蒙版压在图下缘。
+        # 结构：图位是相对定位容器，<img> 在底层，文言引文用半透明蒙版压在图下缘。
+        #
+        # v0.3.12 调优（实图评审后）：
+        #   初版渐变 0→0.55→0.86 太陡、蒙版太矮，把画面主体（p5 的羊群、p1 的杖）
+        #   压掉了。改为更柔的长过渡 + 更足的渐变高度，文言上移一点让读起来更稳。
         if i < len(inp.page_image_urls):
             url = inp.page_image_urls[i]
             quote = (getattr(page, "dialogue", "") or "").strip()
@@ -619,20 +623,22 @@ def render_template_c(inp: ArticleInput) -> str:
                 q_html = _esc(quote).replace("\n", "<br/>")
                 mask = (
                     f'<div style="position:absolute;left:0;right:0;bottom:0;'
-                    f'padding:26px 16px 12px 16px;'
+                    f'padding:54px 18px 16px 18px;'
                     f'background:linear-gradient(180deg,'
-                    f'rgba(20,16,12,0) 0%,'
-                    f'rgba(20,16,12,0.55) 42%,'
-                    f'rgba(20,16,12,0.86) 100%);">'
+                    f'rgba(24,18,12,0) 0%,'
+                    f'rgba(24,18,12,0.18) 34%,'
+                    f'rgba(24,18,12,0.62) 72%,'
+                    f'rgba(24,18,12,0.80) 100%);">'
                     f'<p style="margin:0;font-family:STKaiti,KaiTi,楷体,serif;'
-                    f'font-size:15px;line-height:24px;color:#f5efe2;'
-                    f'letter-spacing:1px;text-shadow:0 1px 3px rgba(0,0,0,0.6);">'
-                    f'　{q_html}　</p></div>'
+                    f'font-size:16px;line-height:27px;color:#f7f2e8;'
+                    f'letter-spacing:1.5px;line-break:strict;'
+                    f'text-shadow:0 1px 4px rgba(0,0,0,0.75),0 0 12px rgba(0,0,0,0.5);">'
+                    f'{q_html}</p></div>'
                 )
             else:
                 mask = ""
             out.append(
-                f'<div style="position:relative;margin:0 20px 20px 20px;">'
+                f'<div style="position:relative;margin:0 20px 22px 20px;">'
                 f'<img src="{_esc(url)}" style="max-width:100%;display:block;" '
                 f'data-page="{page.page}" />'
                 f'{mask}'
