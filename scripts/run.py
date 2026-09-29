@@ -40,6 +40,7 @@ sys.path.insert(0, str(SKILL_ROOT))
 from scripts.core.config import get_config  # noqa: E402
 from scripts.core.planner import plan_storyboard, Storyboard, StoryPage, recommend_pages  # noqa: E402
 from scripts.core.preflight import run_preflight  # noqa: E402
+from scripts.core.visual_qa import run_visual_qa  # noqa: E402
 from scripts.core.image_gen import generate_pages, generate_character_references  # noqa: E402
 from scripts.core import article as article_mod  # noqa: E402
 from scripts.core import publisher as pub_mod  # noqa: E402
@@ -162,11 +163,64 @@ def step_preflight_images(
     }
 
 
-def step_gen_images(    job_id: str,
+def _run_visual_qa(job_id: str, data_dir: Path | None = None) -> None:
+    """v0.3.15: 跑图后 LLM 视觉审核（图上出字 / 画风漂移 / 性别画反 / 图画不符）。
+
+    **刻意不阻塞**：LLM 视觉判断有方差，审核还要烧 token 和时间。这里只打印
+    报告，返工与否由用户看完图拍板。
+
+    这与 preflight 的"阻塞"定位不同：preflight 拦的是**确定的**输入错误，
+    视觉审核报的是**概率性**的输出问题 —— 后者只能提示，不能拦。
+
+    审核失败（网络/超时/模型报错）只打印一行警告，绝不打断流程。
+    """
+    try:
+        res = run_visual_qa(job_id, data_dir=data_dir)
+    except Exception as e:
+        print(f"[visual-qa] 审核异常（不影响已生成的图）：{e}")
+        return
+    if res.error:
+        print(f"[visual-qa] {res.error}")
+    elif res.ok:
+        print(f"[visual-qa] {res.report().strip()}")
+    else:
+        print(f"[visual-qa] {res.report()}")
+        if res.blocks:
+            print(f"[visual-qa] 建议复审/重画："
+                  f"{sorted({f.page for f in res.blocks})}")
+
+
+def step_visual_qa(
+    job_id: str,
+    pages: list[int] | None = None,
+    data_dir: Path | None = None,
+) -> dict:
+    """Step 辅助:只做视觉审核,不跑图。返回结构化结果。
+
+    v0.3.15 新增。典型用法：用户复审后只重看了某几页,单独再审一遍。
+    """
+    res = run_visual_qa(job_id, data_dir=data_dir, pages=pages)
+    return {
+        "checked": res.checked,
+        "skipped": res.skipped,
+        "error": res.error,
+        "blocks": [{"page": f.page, "code": f.code, "msg": f.msg,
+                    "confidence": f.confidence, "evidence": f.evidence}
+                   for f in res.blocks],
+        "warns": [{"page": f.page, "code": f.code, "msg": f.msg,
+                   "confidence": f.confidence, "evidence": f.evidence}
+                  for f in res.warns],
+        "report": res.report(),
+    }
+
+
+def step_gen_images(
+    job_id: str,
     data_dir: Path | None = None,
     regenerate_pages: list[int] | None = None,
     auto_char_refs: bool = True,
     skip_preflight: bool = False,
+    auto_visual_qa: bool = True,
 ) -> list[Path]:
     """Step 2: 从 storyboard.json 跑图 → PNG 列表
 
@@ -176,6 +230,8 @@ def step_gen_images(    job_id: str,
         auto_char_refs: v0.2.5 人物故事自动跑角色参考图 + 用 i2i
         skip_preflight: v0.3.15 逃生阀。设 True 跳过生图前体检
             （体检有阻塞项但用户确认要硬跑时才用）
+        auto_visual_qa: v0.3.15 跑完图后自动做 LLM 视觉审核，默认开。
+            审核**不阻塞流程** —— 只打印报告，返工由用户拍板。
     Returns:
         图片 Path 列表（按页码排序）
 
@@ -251,11 +307,13 @@ def step_gen_images(    job_id: str,
                 all_paths[existing[page_no]] = new_path
         print(f"[gen] 重画 {len(new_paths)} 页,共 {len(all_paths)} 张")
         _run_alignment_check(sb_path)
+        _run_visual_qa(job_id, data_dir=work_root)
         return all_paths
     else:
         paths = generate_pages(sb, job_id, character_refs=character_refs)
         print(f"[gen] 生成 {len(paths)} 张")
         _run_alignment_check(sb_path)
+        _run_visual_qa(job_id, data_dir=work_root)
         return paths
 
 

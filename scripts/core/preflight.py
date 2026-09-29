@@ -371,6 +371,42 @@ def _f_fabricated(p: dict, allowed: set[str]) -> list[Finding]:
     return out
 
 
+def _f_ragged_needs_plain(p: dict) -> list[Finding]:
+    """破损衣物必须配反制词，否则模型会在袍子上"补"伪汉字。
+
+    **实图证据**（kc_1790586703 p04，visual_qa 95% 置信 + 肉眼复核）：
+    visual 写 `robe tattered`，袍子上被画满伪汉字。p01 无破损描述，干净。
+
+    模型看到"破烂的袍子"会主动往上面补纹样/字符。破损本身是叙事需要
+    （十九年风霜），所以这里不禁止破损，而是**要求配反制词**。
+    """
+    v = (p.get("visual") or "").lower()
+    ragged = [w for w in RAGGED_WORDS if w in v]
+    if not ragged:
+        return []
+    if any(w in v for w in PLAIN_GUARD_WORDS):
+        return []
+    # **只报 warn，不阻塞** —— 实图复核证明这是风险因子而非充分条件：
+    # p04（tattered）确有伪汉字，p08（ragged）却干净。同样诱因结果不同，
+    # 判据不成立。阻塞会让关卡变成"狼来了"，用户开始无视它。
+    # 真阳性交给 visual_qa —— 只有它能真的看见图上的字。
+    return [Finding(p["page"], "warn", "RAGGED_NO_PLAIN",
+                    f"衣物写破损（{ragged}）但没有反制词 → 模型会画伪汉字",
+                    "实测 p04 确有伪汉字、p08 没有 —— 是风险不是定论。"
+                    "建议补 PLAIN unadorned / solid-colour / no-pattern；"
+                    "跑完图用 visual_qa 重点看这页衣物")]
+
+
+# 破损/做旧描述 —— 模型会往这类织物上补纹样字符
+RAGGED_WORDS = ["tattered", "worn", "ragged", "torn", "frayed", "patched",
+                "weather-beaten", "torn cloth", "shabby"]
+
+# 反制词 —— 明示"素面无纹"，把模型按住
+PLAIN_GUARD_WORDS = ["plain", "unadorned", "no pattern", "no-pattern",
+                     "solid-colour", "solid color", "unpatterned",
+                     "patternless", "without pattern", "no motif",
+                     "no motifs", "plain weave", "simple weave", "no symbols",
+                     "no characters"]
 
 def _f_no_text_decl(p: dict) -> list[Finding]:
     """零文字风险检查（v0.3.15 反转判据）。
@@ -507,6 +543,7 @@ def run_preflight(storyboard, alignment: dict | None = None) -> PreflightResult:
         res.findings.extend(_f_gender(p, style_id, allowed))
         res.findings.extend(_f_fabricated(p, allowed))
         res.findings.extend(_f_no_text_decl(p))
+        res.findings.extend(_f_ragged_needs_plain(p))
         res.findings.extend(_f_punchline(p))
         res.findings.extend(_f_dialogue(p))
 
