@@ -179,6 +179,39 @@ CHINESE_STYLE_PREFIX = (
     "painting, NOT cinematic, NOT photorealistic. Apply to every pixel of the frame. "
 )
 
+# === v0.3.28：印刷插画风格（new_yorker / us_mid_century）的防写实声明 ===
+#
+# 背景（实测 kc_1791447361「峰终定律」/ new_yorker）：
+# 出图漂成**照片写实**，visual_qa 报 STYLE_DRIFT 90% 置信、TEXT_ON_IMAGE 85%。
+# 排查结论是根因**不是"没写风格"** —— dump 出来的 prompt 里
+# `Risograph print style on cream paper` / `Flat low-saturation color blocks` /
+# `subtle halftone dot pattern` / `NOT a photograph` 全都在。真正的问题是：
+#
+#   1. `LIANHUANHUA_STYLE_LOCK` 被**无条件**拼进所有风格 —— 于是 new_yorker 的
+#      prompt 里同时写着「Risograph 平面印刷」和「戴敦邦派宣纸工笔连环画」。
+#      **两套互斥的风格指令打架时，模型退回了它最熟练的写实摄影。**
+#      这是主因，已改为只给中国画风格（见 `_assemble` 里的 `lianhuanhua_lock`）。
+#   2. 非中国风格既没有**前置**风格声明，也不剥 planner 写进 visual 的
+#      `35mm` / `shallow_dof` 等摄影词 —— 摄影概念一路进 prompt，把平面印刷感冲掉。
+#
+# 注意：这两条常量只声明"这是印刷出来的插画"，**不描述具体画风**——
+# 具体长什么样由各风格自己的 `StylePreset.prompt_en` 负责（Risograph 网点 / 复古色块）。
+PRINT_STYLE_PREFIX = (
+    "STRICT STYLE — the entire image is a PRINTED ILLUSTRATION: ink linework and flat "
+    "opaque colour printed on paper. NOT a photograph, NOT a photograph of a person, "
+    "NOT a 3D render, NOT a digital painting, NOT a cinematic film still, "
+    "NOT photorealistic. Apply to every pixel of the frame. "
+)
+
+PRINT_STYLE_LOCK = (
+    " CRITICAL STYLE LOCK: flat printed illustration on paper. Drawn ink contours, "
+    "flat colour shapes with hard edges, visible paper grain. "
+    "NO photographic lens blur, NO bokeh, NO shallow depth-of-field, NO realistic skin "
+    "texture, NO cinematic lighting falloff, NO 3D shading. "
+    "Faces are DRAWN with linework, never photographed. "
+    "If any part of the frame looks photographic, the whole image has failed. "
+)
+
 # === 角色一致性硬约束（按风格自动选 anchor）===
 CHARACTER_SCIENTIST = (
     "Consistent character anchor (must remain identical across all panels): "
@@ -855,6 +888,15 @@ TRADITIONAL_CN_STYLES: frozenset[str] = frozenset({
     "guochao_manhua",
 })
 
+# v0.3.28：印刷插画风格 —— 与"中国画"相对的另一支。这两支都需要
+# 「前置风格声明 + STRICT STYLE LOCK + 剥摄影词」三件套，只是声明内容不同：
+# 中国画那支说"宣纸毛笔矿物颜料"，这支说"印在纸上的平面印刷插画"。
+# 此前三件套只给了中国画那支，这支裸奔 → 实测 new_yorker 漂成照片写实。
+PRINT_ILLUSTRATION_STYLES: frozenset[str] = frozenset({
+    "new_yorker",
+    "us_mid_century",
+})
+
 
 # === v0.2.6: scene_description cinematic 词剥离器 ===
 # planner LLM 经常在 visual 字段里写 cinematic 镜头语言（35mm/low angle/deep focus），
@@ -877,6 +919,9 @@ _CINEMATIC_TERM_PATTERNS: list[tuple[_re.Pattern, str]] = [
     (_re.compile(r"\bdutch[\s_-]tilt\b", _re.IGNORECASE), "oblique perspective"),
     (_re.compile(r"\bshallow[\s_-]*dof\b", _re.IGNORECASE), "with crisp outlines"),
     (_re.compile(r"\bdeep[\s_-]*focus\b", _re.IGNORECASE), "with crisp layering"),
+    # v0.3.28：bokeh 是纯摄影概念，任何非写实风格都不该出现（印刷风格尤其不行）
+    (_re.compile(r"\bcreamy\s+bokeh\b", _re.IGNORECASE), "with crisp outlines"),
+    (_re.compile(r"\bbokeh\b", _re.IGNORECASE), "flat shapes"),
     (_re.compile(r"\bshallow[\s_-]*depth\b", _re.IGNORECASE), "with crisp outlines"),
     (_re.compile(r"\bdeep[\s_-]*depth\b", _re.IGNORECASE), "with crisp layering"),
     (_re.compile(r"\beye[\s_-]*level\b", _re.IGNORECASE), "at eye height"),
@@ -968,14 +1013,50 @@ def build_image_prompt(
     negative = style.negative + (", " + extra_negative if extra_negative else "")
 
     # v0.2.5/0.2.6: 中国画风格用专属 booster + 前置风格声明 + 剥 cinematic 词
+    # v0.3.28: 印刷插画风格（new_yorker / us_mid_century）并入同一套"非写实"处理。
+    #          此前它们既没有前置声明、也不剥摄影词与中文速记，实测漂成照片写实
+    #          （kc_1791447361 / STYLE_DRIFT 90%）。两支的区别只在声明的**内容**：
+    #          中国画那支说"宣纸毛笔矿物颜料"，印刷那支说"印在纸上的平面印刷插画"。
     is_traditional_cn = style_id in TRADITIONAL_CN_STYLES
-    style_prefix = CHINESE_STYLE_PREFIX if is_traditional_cn else ""
-    composition_boost = CHINESE_PAINTING_BOOST if is_traditional_cn else (
-        f"{CAMERA_LANGUAGE_KIT} "
-        f"{DEPTH_LAYERS_BOOST} "
-        f"{CINEMATIC_FRAMEWORK_BOOST} "
-    )
+    is_print_illustration = style_id in PRINT_ILLUSTRATION_STYLES
+    stylized = is_traditional_cn or is_print_illustration
+
     if is_traditional_cn:
+        style_prefix = CHINESE_STYLE_PREFIX
+    elif is_print_illustration:
+        style_prefix = PRINT_STYLE_PREFIX
+    else:
+        style_prefix = ""
+
+    if is_traditional_cn:
+        composition_boost = CHINESE_PAINTING_BOOST
+    else:
+        # v0.3.28 实测记录 —— **不要把 CAMERA_LANGUAGE_KIT 从印刷风格里拿掉**：
+        #
+        # 我曾为了"消矛盾"给印刷风格换成一套不含镜头/景深词的自制取景说明
+        # （打印插画不该讲 35mm / 浅景深，而 kit 里写着
+        #  `shallow_dof (subject sharp, background creamy bokeh)`，
+        #  和 PRINT_STYLE_LOCK 的 "NO shallow depth-of-field" 字面打架）。
+        #
+        # **真跑出来是回归**：同一页 p1，
+        #   - 用 CAMERA_LANGUAGE_KIT：干净的编辑插画，visual_qa 无 STYLE_DRIFT
+        #   - 换成精简取景说明：visual_qa 报 STYLE_DRIFT 95%，
+        #     肉眼确认是"平面线稿人物贴在**写实照片背景**上"
+        # 已回退（n=1 对 1，图像模型本就有 10-20% 固有方差，所以不下强结论；
+        # 但"已验证出好图的配置"不该为了字面整洁被换掉）。
+        #
+        # 结论：kit 是**构图词汇表**，不是渲染指令；真正压住写实的是
+        # PRINT_STYLE_PREFIX / PRINT_STYLE_LOCK 这对前置+夹击声明（已验证有效）。
+        composition_boost = (
+            f"{CAMERA_LANGUAGE_KIT} "
+            f"{DEPTH_LAYERS_BOOST} "
+            f"{CINEMATIC_FRAMEWORK_BOOST} "
+        )
+    # v0.3.9/v0.3.18 的"剥中文速记 + CONCEPT 提权"原本只给中国画风格；v0.3.28 起
+    # 对印刷插画风格同样生效 —— 实测 new_yorker 每页混入 9 条 `// 中文速记`
+    # （"// 中景 平视" "// 冷光 顶光" …），正是 v0.3.9 记录过的
+    # "中文语义冲淡英文风格锁定"。剥掉后 CONCEPT 段整段提到头部最高权重区。
+    if stylized:
         scene_description = _strip_cinematic_terms(scene_description)
         # v0.3.9 关键修复：剥掉 v0.3.7 引入的 `// 中文速记`。
         # 速记是**给人看**的（审阅 layout_preview 时显示），绝不能进图像 prompt ——
@@ -1000,6 +1081,7 @@ def build_image_prompt(
 
     # v0.2.10 修复: 中国画风格强化 STRICT STYLE 夹击 —— 头部 + 角色锚点后再次重复,
     # 防止 agnes 看到 subject 描述里的"armor / map table / looking up"等现代写实关键词跑偏。
+    # v0.3.28: 印刷插画风格同样需要夹击（同一失效模式，只是声明内容不同）。
     style_lock_repeat = ""
     if is_traditional_cn:
         style_lock_repeat = (
@@ -1007,6 +1089,15 @@ def build_image_prompt(
             "NOT a photograph, NOT a 3D render, NOT commercial CG, NOT modern digital illustration, NOT anime. "
             "Brush technique and pigment flatness required throughout. "
         )
+    elif is_print_illustration:
+        style_lock_repeat = PRINT_STYLE_LOCK
+
+    # v0.3.28：连环画锁**只给中国画风格**。此前它被**无条件**拼进所有风格 ——
+    # 于是 new_yorker 的 prompt 里同时写着「Risograph 平面印刷」和「戴敦邦派宣纸工笔
+    # 连环画」，两套互斥指令打架时模型退回了它最熟练的写实摄影
+    # （实测 kc_1791447361：STYLE_DRIFT 90% + TEXT_ON_IMAGE 85%）。
+    # 这是本轮"漂写实"的主因。
+    lianhuanhua_lock = LIANHUANHUA_STYLE_LOCK + " " if is_traditional_cn else ""
 
     def _assemble(scene: str) -> str:
         """唯一的 prompt 拼装点（v0.3.21）。
@@ -1045,7 +1136,7 @@ def build_image_prompt(
             f"{style_lock_repeat}"
             f"Scene: {scene} "
             f"{composition_boost} "
-            f"{LIANHUANHUA_STYLE_LOCK} "
+            f"{lianhuanhua_lock}"
             f"{PATTERN_SUPPRESS} "
             f"{ZERO_TEXT_BOOST} "
             f"Avoid: {negative}"

@@ -42,7 +42,7 @@ python -c "from scripts.run import step_visual_qa; print(step_visual_qa('<job_id
 | `BODY_LONG` | 正文 > **170** 字 | 文字压过画面 |
 | `HEDGING` | 「（或…）」「（实际为…）」「我不确定」 | LLM 不确定时的自我暴露，会印到成品上 |
 | `GENDER_PARTIAL` | 前缀式多角色页有段漏标 `[GENDER]` | 漏标会让模型自由发挥性别 → 整批图跑偏 |
-| `TEXT_INVITING` | visual 含 `calligraphy` / `inscribed` / `banner` 等诱导词 | 模型会**真的把字画进图里**（本项目最常复发的 bug） |
+| `TEXT_INVITING` | visual 含 `calligraphy` / `inscribed` / `signboard` / `banner text` / `characters on` 等诱导词 | 模型会**真的把字画进图里**（本项目最常复发的 bug）。**注意**：裸词 `banner` 已于 v0.3.28 移出 —— 它在历史战争题材里指军旗/旌旗（实测「叛军的黑红旗帜」被误判，12 页全阻塞）；带文字的横幅由 `banner text` 覆盖 |
 | `CHAR_GENDER_MISSING` | 角色没填 `gender` | v0.3.22 起阻塞，且内置人名表**不再兜底** |
 | `ERA_ANACHRONISM` | 角色 `visual_signature` 含后世器物 | 春秋角色写幞头这类时代穿帮 |
 | `ALIGN_HIGH` | 图文不符高风险页 | 需传入 `alignment` 才检查 |

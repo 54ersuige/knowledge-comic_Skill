@@ -177,7 +177,7 @@ PLANNER_SYSTEM_PROMPT = """你是知识漫画分镜师。
 |---|---|
 | `highlight` | 章节大字 4-8 字，跨页唯一（如「1347」「跳蚤」「1/3」） |
 | `caption` | 场景说明，中文 10-20 字 |
-| `body` | 正文，**严格 100-150 字**，写成 3-5 个短句（每句 15-40 字），现代白话 |
+| `body` | 正文，**严格 100-150 字（不足 100 字不合格）**，写成 3-5 个短句（每句 15-40 字），现代白话 |
 | `keywords` | **必填 3-6 个**专有名词（人名/地名/朝代/官职/事件），供朱砂红高亮 |
 | `dialogue` | **每页必填**文言原文引句 8-50 字 |
 | `punchline` | 白话点题金句 10-22 字，渲染成「定格瞬间」 |
@@ -202,6 +202,10 @@ PLANNER_SYSTEM_PROMPT = """你是知识漫画分镜师。
 1. **讲事** 40-50 字 —— 这一页发生了什么（时间/地点/人物/动作）
 2. **说破** 40-60 字 —— 把这一步的「为什么」用人话说出来
 3. **落点** 20-30 字 —— 一句判断，**不重复画面**
+
+**下限是硬要求：三拍不足 100 字 = 不合格。** 最常丢的是**「说破」拍** ——
+只写讲事 + 落点会停在 80-95 字，读者看不到「为什么」。写完自己数一遍，
+不够就补一句「为什么」或一个具体细节（数字 / 器物 / 动作），不要靠拉长句子凑数。
 
 三拍之间不要每句都换行，读起来要有节奏。
 
@@ -282,7 +286,9 @@ CONCEPT: <正文这一页要讲清的核心概念> → <画面里用哪个具体
 
 ### 4.2 七要素 + 中文速记
 
-每页 visual 按 7 个键值组织（不强制分隔符，但每个关键词都要出现）：
+每页 visual 按 **7 个键值**组织，**七段缺一不可**（不强制分隔符，但每个关键词都要出现）。
+**LLM 会照抄范例** —— 实测范例曾漏 PLACEMENT / DEPTH LAYERS / LIGHTING 三段，
+产出就跟着整段消失，所以下面的范例是完整七段，照它写。
 
 1. **SUBJECT** — 画面里有谁（具体人物 + 次要角色 / 群众 / 敌人剪影）
 2. **ACTION** — 正在做什么，**用反应动词**（yanking / slashing / biting / burning /
@@ -291,24 +297,24 @@ CONCEPT: <正文这一页要讲清的核心概念> → <画面里用哪个具体
    close_up / insert_extreme_close）+ **angle**（eye_level / low_angle / high_angle /
    dutch_tilt / birds_eye / worms_eye）+ **lens**（24 / 35 / 50 / 85 / 135mm）+
    **DoF**（shallow_dof / deep_focus / rack_focus）
-4. **PLACEMENT** — 主体在画面的具体位置（"positioned on the left third" /
-   "centered but offset toward upper-right" / "in the foreground right"）
-5. **DEPTH LAYERS** — 三层景深显式列出：
-   - **FOREGROUND** — 离镜头最近的元素（门框边缘 / 刀刃尖 / 纸屑 / 绳索末端 / 铠甲片 / 尘埃）
-   - **MIDGROUND** — 主体动作发生的层
-   - **BACKGROUND** — 两个以上远景元素（建筑剪影 / 远山 / 烟柱 / 旗帜 / 敌军队列 / 天空渐变）
-6. **LIGHTING** — 光源 + 方向 + 色温 + 软硬（"hard side-light from a single candle on the
-   left, deep crimson wash from behind"），禁用泛词 "dramatic lighting"
+4. **PLACEMENT** — 主体在画面中的具体位置（"on the left third" / "foreground right"）
+5. **DEPTH LAYERS** — 显式三层：**FOREGROUND**（门框边缘 / 刀刃尖 / 纸屑 / 铠甲片）/
+   **MIDGROUND**（主体动作发生的层）/ **BACKGROUND**（两个以上远景元素：建筑剪影 /
+   远山 / 烟柱 / 旗帜 / 敌军队列）
+6. **LIGHTING** — 光源 + 方向 + 色温（"hard side-light from a single candle on the
+   left"），禁用泛词 "dramatic lighting"
 7. **MOOD/PALETTE** — 情绪 + 配色绑定（"tense anticipation in desaturated ink black +
-   cinnabar red + bone white"）
+   cinnabar red"）
 
 **每段末尾必须追加 `// 中文` 速记**（写给用户看，不是写给模型看的）：
 
 ```
 SUBJECT: Su Wu, 30yo Han envoy, wearing formal dark robe // 苏武 汉使 出塞
-ACTION: Su Wu bows deeply before the departing court // 苏武 躬身 辞行
-BACKGROUND: vast snowy horizon, distant city walls with flags // 雪原 远城 旌旗
-CAMERA: Extreme wide shot, high angle, 24mm lens, deep focus // 大远景 俯拍
+ACTION: Su Wu bows deeply before the departing court, hands clasped to his chest // 苏武 躬身 辞行
+CAMERA: extreme_wide, high_angle, 24mm, deep_focus // 大远景 俯拍
+PLACEMENT: on the left third, snowy void on the right // 左侧三分之一 留白
+DEPTH LAYERS: FOREGROUND: banner pole tip; MIDGROUND: Su Wu and the court; BACKGROUND: distant walls with flags // 前景旌节 中景苏武 背景远城
+LIGHTING: cold low winter sun from behind // 逆光 冷白
 MOOD: solemn duty, desaturated blue-white palette // 庄严 克制的蓝白
 ```
 

@@ -8,7 +8,7 @@ description: |
   「一图读懂」「给这篇文章配图做成漫画」，或给出一个主题 + 要点列表想要成品图文。
   Do NOT use for：单张插画/封面图（直接跑图即可，不需要分镜与排版）；纯文案撰写（用公众号写作类
   skill）；已有图片要排版成文章（用排版类 skill）；科普长文而非漫画（用知识解读类 skill）。
-version: 0.3.27
+version: 0.3.28
 ---
 
 # Knowledge Comic (WeChat MP)

@@ -6,6 +6,7 @@
 
 ## 快速索引（版本 → 一句话）
 
+- **0.3.28**（2026-10-08）：**输出质量三修**（真实 LLM + 真实出图实测驱动）。① **【阻塞级】** 裸词 `banner` 让中文历史战争题材 **12/12 页全阻塞**（"叛军的黑红旗帜"被判诱导画字）—— 与 v0.3.26 的 `inscriptions` 同源，第 3 次同类复发，已移出词表；② **`new_yorker` / `us_mid_century` 漂成照片写实**：根因是 `LIANHUANHUA_STYLE_LOCK` **被无条件拼进所有风格**（Risograph 与戴敦邦宣纸工笔互斥打架）+ 非中国风格无前置声明、不剥摄影词与中文速记 → 新增 `PRINT_ILLUSTRATION_STYLES` 三件套，实测 STYLE_DRIFT **90% 阻塞 → 40% 建议**；③ **七要素只落到 4 段**：§4.2 范例题只写了 5 段而 LLM 照抄 → 补齐后 **7/7 段**；正文平均 **89 → 100 字**，`BODY_SHORT` **3 页 → 0 页**
 - **0.3.27**（2026-10-08）：**文档层重构 + 目录卫生**。① `SKILL.md` 1102 → 227 行（体积 -82%，每次触发少烧约 17K tokens）——三块互不相邻的版本史搬进本文件，**原文未改一字**；② 新增 `references/quality-gates.md`，判据**从代码取真值**（22 个 preflight code + 4 个 visual_qa code）而不是抄旧文档；③ `README.md` 整体停在 v0.2.4 且推荐两个已归档脚本 → 删除，安装说明并入 `SKILL.md` 的 `## Setup`；④ `scripts/review.py` 的 `set_page_field` / `dump_storyboard` 上收为 `run.py` 的 `step_set_page_field` / `step_dump_storyboard`（step 函数不该让 Mavis 去调旁路模块）；⑤ 新增 `scripts/check_docs.py` —— 校验文档 ↔ 代码一致性，应对本项目**第 4 次复发的文档漂移**；⑥ 清掉 434MB `data/` + 22MB `_archive/` + 7 个无人引用的外围脚本 + 根目录垃圾（`$null` / `_tmp_*.py` / `_msg2.txt`）；⑦ 修 `guide.py` 死引用、`preflight.py` 同名函数重复定义（347/393 行）、`style_guide.md` 的「总分≥90」死规格、`prompts.py` 把 5 风格写成 3 风格、`check_drift.py` 依赖不存在的 `AGENTS.md`；⑧ **测试夹具从 gitignore 的 `data/` 移进 `scripts/tests/fixtures/`** —— 原先那个测试只在"恰好跑过该 job 的机器"上能过，换设备必红
 - **0.3.26**（2026-10-08）：两个 preflight 判据反转（零文字声明里的枚举被误判成"诱导画字"→ 12/12 页全阻塞；清代皇帝穿龙袍被判时代穿帮）+ 强制交付资产（**没发过的资产 = 没做完**）
 - **0.3.25**（2026-10-08）：live 验证抓出的静默降级。① **【真故障】** LLM 返回**合法 JSON**（`finish_reason=stop`、括号闭合、16K 字符、`json.loads` 直解成功）却被旧解析层判「non-JSON」—— 根因是旧实现**手写大括号计数、不认字符串字面量**，visual/正文里一个不平衡的 `{`/`}` 或 JSON 尾部多余文字都会整段失败；`temperature=0.7` 所以是偶发的，看起来像"跑通了"。改用 stdlib `JSONDecoder.raw_decode` + 4 层尝试，报错带尝试记录与 `finish_reason`。② **【更严重】** 解析失败会**静默降级**到 mock，而 mock 没有 `keywords`/`[GENDER]`，等于把朱砂高亮与性别锚点整条链路废掉，拖到审阅阶段才炸 30 个 error。现在拆成两类：没配 key = 合法离线模式照旧降级；配了 key 但调用/解析失败 = **默认当场抛错**，`allow_mock_fallback=True` 才降级（已透传到 `step_plan`）。③ 修 v0.3.24 重编号后遗留的 8 处过期「铁律 N」交叉引用。④ 新增 `test_json_extract_v0324.py`（24 项）、`test_fallback_v0324.py`（11 项）、`test_drift_v0324.py`。测试 11/11，lint 0
@@ -49,6 +50,99 @@
 ---
 
 ## 详细版本记录
+
+## v0.3.28 核心变化（2026-10-08，输出质量三修 —— 全部由实测驱动）
+
+**背景**：v0.3.27 完成文档层重构后，用户要求「确保这个 skill 的输出效果」。
+于是用**真实 LLM + 真实渲染 + 真实出图**跑了三轮，而不是 dry-run。
+三个缺陷**全部是既有问题** —— `image_gen.py` 完全没被 v0.3.27 碰过，
+`prompts.py` 只改了 docstring —— 但它们实打实影响成品。
+
+### 1.【阻塞级】裸词 `banner` —— 历史战争题材一张图都跑不了
+
+实测 kc_1791447274「张巡守睢阳」被自己的关卡拦在 p1：
+
+```
+[block] p1 TEXT_INVITING :: 画面描述含会诱导模型画字的词 ['banner']
+```
+
+而原文是 `black and red banners of the Yan army` —— **军旗 / 旌旗**，中文历史战争
+题材的核心视觉元素。`TEXT_INVITING_WORDS` 里的裸词 `banner` 本意是拦"招牌 / 横幅"，
+把军旗一起拦了。
+
+**这与 v0.3.26 刚修的 `inscriptions` 是同一个失效模式**（关卡把合规写法当违规），
+在本项目已是**第 3 次**同类复发（v0.3.15 NO_TEXT_MISSING → v0.3.26 inscriptions
+→ 本次 banner）。修法：移出裸词，保留 `banner text` / `signboard` / `written` /
+`characters on` 等真风险词。验证：该 job 由 `blocked=True` 变为 `0 blocks`。
+
+### 2.【严重】`new_yorker` / `us_mid_century` 漂成照片写实
+
+实测 kc_1791447361「峰终定律」出图是**一张照片**，visual_qa 报 `STYLE_DRIFT 90%` +
+`TEXT_ON_IMAGE 85%`。排查确认根因**不是"没写风格"** —— dump 出来的 prompt 里
+`Risograph print style on cream paper` / `Flat low-saturation color blocks` /
+`NOT a photograph` 全都在。真问题是三条：
+
+| 来源 | 证据 |
+|---|---|
+| **`LIANHUANHUA_STYLE_LOCK` 被无条件拼进所有风格** | new_yorker 的 prompt 里同时出现「Risograph 平面印刷」与「戴敦邦派宣纸工笔连环画」—— **两套互斥指令打架，模型退回最熟练的写实摄影**（主因） |
+| 非中国风格**无前置风格声明、无 STRICT STYLE LOCK** | 只有中国画那支有 `CHINESE_STYLE_PREFIX` / `style_lock_repeat` |
+| 非中国风格**不剥摄影词与中文速记** | 实测每页混入 **9 条** `// 中文速记`，正是 v0.3.9 记录过的"中文语义冲淡英文风格锁定"；`35mm lens` / `shallow_dof` 也一路进 prompt |
+
+**修法**：把"非写实处理"抽成 `stylized = is_traditional_cn or is_print_illustration`，
+新增 `PRINT_ILLUSTRATION_STYLES` + `PRINT_STYLE_PREFIX` + `PRINT_STYLE_LOCK`，
+并把 `LIANHUANHUA_STYLE_LOCK` 收回给中国画风格。
+
+**实测效果**（同一页 p1，真出图）：
+
+| 配置 | visual_qa 判读 |
+|---|---|
+| v0.3.27（改前） | `STYLE_DRIFT 90%` **阻塞** —— 照片 |
+| v0.3.28（改后） | 无漂移 —— 干净编辑插画 |
+| 同上重跑一次 | `STYLE_DRIFT 40%` **建议**（左米色平涂 / 右暗部渐变的调性差异） |
+
+**残留方差是真实的**：图像模型有 10-20% 固有漂移率（项目既有结论），本文 n=2~4，
+只够说明"从阻塞级降到建议级"，不足以宣称消除。
+
+**一次被实测否掉的改动**：为消掉 `CAMERA_LANGUAGE_KIT` 里
+`shallow_dof (creamy bokeh)` 与 `PRINT_STYLE_LOCK` 的 "NO shallow depth-of-field"
+字面矛盾，我曾给印刷风格换了一套精简取景说明 —— **真跑出来是回归**
+（`STYLE_DRIFT 95%`，肉眼确认是"平面线稿人物贴在写实照片背景上"）。已回退，
+并把这段实测写进 `build_image_prompt` 的注释，防止后人再"为整洁而换掉"。
+教训：**kit 是构图词汇表，不是渲染指令**；真正压住写实的是前置 + 夹击那对声明。
+
+### 3.【内容】七要素只落到 4 段 + 正文偏薄
+
+- **七要素**：§4.2 的**范例题只写了 5 段**（漏 PLACEMENT / DEPTH LAYERS / LIGHTING），
+  而 **LLM 会照抄范例** → 实测七段只落到四段。补齐范例后 **6/6 页 7/7 段**。
+- **正文**：prompt 里只有上限有代码兜底（`_clamp_body`），下限纯靠提示。
+  实测历史题材平均 89 字、3 页低于 `BODY_WARN_LO`。补上"不足 100 字 = 不合格"
+  的硬要求后：**平均 89 → 100 字，`BODY_SHORT` 3 页 → 0 页**；同一份 storyboard
+  跑 preflight 从 `1 block + 3 warns` 变为 **`0 block + 0 warn`**。
+
+### 4. 其他
+
+- `_CINEMATIC_TERM_PATTERNS` 补 `bokeh` 剥离规则（纯摄影概念，任何非写实风格
+  都不该出现；此前只覆盖 `shallow_dof` / `deep_focus`）。
+- 为容纳新增规则，§4.2 条目做了去冗余（范例已演示格式）——
+  `PLANNER_SYSTEM_PROMPT` 保持 **13,967 字符**（预算 <14,000、压缩率 37%），
+  `test_prompt_v0324.py` 的体积断言继续成立（**由我压缩去满足它，不是改测试**）。
+- 新增 `scripts/tests/test_v0328.py`（双向用例：该放行 + 该拦同时成立）。
+- **观察到的偶发问题（未修，留档）**：planner 返回的 JSON 偶发被判 `non-JSON`
+  并抛错（6 次运行中 1 次）。`temperature=0.7`，与 v0.3.25 记录的同类偶发同源；
+  当前行为是**大声抛错**（不是静默降级），重跑即可。补一次自动重试是后续可选优化。
+- **一条被测试文档化的已知限制**：`_CONCEPT_RE` 的右边界靠"下一个换行处的要素标签"
+  或字符串结尾；若 visual 写成**单行**，CONCEPT 会吞掉整段场景。真实 planner 输出
+  是多行的，生产路径正常，故未改（改动它要承担 CONCEPT 抽取回归的风险）。
+
+### 5. 验证
+
+```
+python scripts/run_tests.py     14/14 通过, 0 失败
+ruff check scripts/             All checks passed!
+python scripts/check_docs.py    7 份文档无悬空引用；step_* 全部存在
+```
+
+真实出图 3 张 + 真实 LLM 分镜 6 次（含 4 次 JSON 失败率探针）
 
 ## v0.3.27 核心变化（2026-10-08，文档层重构 + 目录卫生）
 

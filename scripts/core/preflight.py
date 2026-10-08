@@ -546,9 +546,13 @@ def _f_no_text_decl(p: dict) -> list[Finding]:
     都一样。结果苏武牧羊 10/10 页全部误报，p09 只是唯一写了
     `STRICT NO TEXT` 的那页。
 
-    **真风险是反方向的**：visual 里出现 `calligraphy` / `inscribed` / `banner`
-    / `signboard` 这类词时，模型会**主动画出字符**，把 ZERO_TEXT_BOOST 压过去。
+    **真风险是反方向的**：visual 里出现 `calligraphy` / `inscribed` / `signboard`
+    这类词时，模型会**主动画出字符**，把 ZERO_TEXT_BOOST 压过去。
     planner 铁律 4 明确禁这些词，关卡就是来兜底的。
+
+    v0.3.28：裸词 `banner` 已移出词表 —— 它在中文历史题材里指**军旗 / 旌旗**
+    （实测 kc_1791447274「叛军的黑红旗帜」被误判，12 页全阻塞）；
+    "带文字的横幅"由 `banner text` 覆盖。
     """
     v = (p.get("visual") or "").lower()
     out = []
@@ -558,7 +562,7 @@ def _f_no_text_decl(p: dict) -> list[Finding]:
                            f"画面描述含会诱导模型画字的词 {hits}",
                            "planner 铁律 4：服饰/地图/兵器描述不得出现 "
                            "decorative patterns / calligraphy / inscribed / "
-                           "banner / signboard 这类词 —— 模型会当真画字符。"
+                           "signboard / banner text 这类词 —— 模型会当真画字符。"
                            "改写成 PLAIN unadorned / abstract terrain"))
     return out
 
@@ -729,8 +733,16 @@ def _positive_mention(text: str, word: str) -> bool:
         start = i + len(w)
 
 # 会诱导模型在图上画字的词 —— planner 铁律 4 明令禁止
+#
+# v0.3.28 移出裸词 "banner"（实测 kc_1791447274 张巡守睢阳）：
+# planner 写 `black and red banners of the Yan army` —— 这里的 banner 是
+# **军旗 / 旌旗**，是中文历史战争题材的核心视觉元素，跟"往图上画字"无关。
+# 裸词被拦的后果是**整篇 12/12 页一张图都跑不了**，而它拦掉的正是最标准的写法。
+# 与 v0.3.26 的 `inscriptions`、v0.3.15 的 NO_TEXT_MISSING 同源 ——
+# 关卡把合规写法当违规，这在本项目已是第 3 次同类复发。
+# 真正的风险词仍在表里：`banner text` / `signboard` / `written` / `characters on`。
 TEXT_INVITING_WORDS = [
-    "calligraphy", "inscribed", "inscription", "signboard", "banner",
+    "calligraphy", "inscribed", "inscription", "signboard",
     "scroll with", "banner text", "written", "characters on",
     "decorative pattern", "embroidered with", "engraved",
 ]
