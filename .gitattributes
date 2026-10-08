@@ -1,0 +1,30 @@
+# 行尾符统一（v0.3.24 新增）
+#
+# 背景：`git checkout` 会按 `core.autocrlf` 重新检出文件，导致同一份代码在
+# Skill 真源和 dev 镜像之间出现 CRLF/LF 差异。2026-10-08 合回 main 时实测：
+# review_page.py / story_script.py / thresholds.py 三个文件被误报"漂移"，
+# 而**每一行内容完全一致**（行数也一致），只差一个 \r。
+#
+# `check_drift.py` 已经改成比对归一化后的内容，所以这个误报不再出现。
+# 但两个仓各加一份 .gitattributes 能从根上消除"同一份代码两种字节表示"，
+# 免得以后再用别的工具（diff / 二进制比较 / 部署）时又踩一遍。
+#
+# 规则：仓库内统一存 LF，检出到 Windows 时转 CRLF（eol=crlf）；
+# 二进制文件不转换。
+
+* text=auto eol=crlf
+
+# 二进制：绝不转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.mp4   binary
+*.mp3   binary
+*.zip   binary
+*.pdf   binary
+
+# 这些本来就不是文本 / 转了会坏
+*.sig   binary
+.env    text eol=crlf

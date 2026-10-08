@@ -56,31 +56,66 @@ def resolve_dev_core() -> Path:
     return DEFAULT_DEV_CORE
 
 
+def _read_norm(p: Path) -> bytes:
+    """读文件并**归一化行尾符 + 去 BOM**。
+
+    为什么必须归一化（v0.3.24 实测踩到的坑）
+    --------------------------------------
+    最初这里直接 `sha256(read_bytes())` 比原始字节，结果在
+    `git checkout main` 之后误报 3 处漂移：真源 CRLF、镜像 LF，
+    **每一行的内容完全一致**（行数也一致），只差一个 \\r。
+    根因是 git 的 `core.autocrlf` 会在 checkout 时按平台重新检出，
+    而两边的检出状态不同。
+
+    这个误报比"没有校验"更糟 —— 报几次假警报之后，人就不看这个工具了。
+    所以改成比对**归一化后的内容**（这才是"两边是不是同一份代码"的语义），
+    同时把"仅行尾符不同"单独作为提示报出来，不当成漂移。
+    """
+    raw = p.read_bytes()
+    if raw.startswith(b"\xef\xbb\xbf"):      # UTF-8 BOM
+        raw = raw[3:]
+    return raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def sha256(p: Path) -> str:
+    """**归一化后**的 SHA-256（见 _read_norm 的说明）。"""
+    return hashlib.sha256(_read_norm(p)).hexdigest()[:16]
+
+
+def raw_sha256(p: Path) -> str:
+    """原始字节哈希，仅用于诊断"仅行尾符不同"的情况。"""
     return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
 
 
-def scan(dev_core: Path) -> tuple[list[str], list[str], list[tuple[str, str, str, str]]]:
-    """返回 (缺失, 多余, 内容不一致)。不一致项为 (name, 源行数, 镜像行数, 哈希说明)。"""
+def scan(dev_core: Path) -> tuple[list[str], list[str], list[tuple], list[str]]:
+    """返回 (缺失, 多余, 内容不一致, 仅行尾符不同)。
+
+    不一致项为 (name, 源行数, 镜像行数, 哈希说明)。
+    「仅行尾符不同」不计入漂移 —— 归一化后内容一样就是同一份代码。
+    """
     src_files = {f.name: f for f in sorted(SKILL_CORE.glob("*.py")) if f.name not in IGNORE}
     if not dev_core.is_dir():
-        return sorted(src_files), [], []
+        return sorted(src_files), [], [], []
 
     dev_files = {f.name: f for f in sorted(dev_core.glob("*.py")) if f.name not in IGNORE}
 
     missing = sorted(set(src_files) - set(dev_files))
     extra = sorted(set(dev_files) - set(src_files))
     mismatch = []
+    eol_only = []
     for name in sorted(set(src_files) & set(dev_files)):
         s, d = src_files[name], dev_files[name]
-        if sha256(s) != sha256(d):
-            mismatch.append((name, str(len(s.read_text(encoding="utf-8").splitlines())),
-                             str(len(d.read_text(encoding="utf-8").splitlines())),
-                             f"{sha256(s)} != {sha256(d)}"))
-    return missing, extra, mismatch
+        if sha256(s) == sha256(d):
+            if raw_sha256(s) != raw_sha256(d):
+                eol_only.append(name)
+            continue
+        mismatch.append((name, str(len(s.read_text(encoding="utf-8").splitlines())),
+                         str(len(d.read_text(encoding="utf-8").splitlines())),
+                         f"{sha256(s)} != {sha256(d)}"))
+    return missing, extra, mismatch, eol_only
 
 
-def report(dev_core: Path, missing, extra, mismatch) -> None:
+def report(dev_core: Path, missing, extra, mismatch, eol_only) -> None:
     total = len([f for f in SKILL_CORE.glob("*.py") if f.name not in IGNORE])
     print(f"[drift] 真源: {SKILL_CORE}")
     print(f"[drift] 镜像: {dev_core}")
@@ -94,6 +129,9 @@ def report(dev_core: Path, missing, extra, mismatch) -> None:
         print(f"  [多余]   {n}  (镜像有、真源已删)")
     for name, sl, dl, h in mismatch:
         print(f"  [不一致] {name}  真源 {sl} 行 / 镜像 {dl} 行   {h}")
+    if eol_only:
+        print(f"  [行尾符] {len(eol_only)} 个文件归一化后一致、原始字节不同"
+              f"（CRLF/LF 差异，不算漂移）: {', '.join(eol_only)}")
     print("-" * 66)
     ok = not (missing or extra or mismatch)
     print(f"[drift] {'一致，无漂移' if ok else f'发现漂移 {len(missing)+len(extra)+len(mismatch)} 处'}")
@@ -129,8 +167,8 @@ def main() -> int:
     if args.sync:
         do_sync(dev_core)
 
-    missing, extra, mismatch = scan(dev_core)
-    report(dev_core, missing, extra, mismatch)
+    missing, extra, mismatch, eol_only = scan(dev_core)
+    report(dev_core, missing, extra, mismatch, eol_only)
     return 1 if (missing or extra or mismatch) else 0
 
 
