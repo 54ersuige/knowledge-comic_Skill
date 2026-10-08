@@ -94,9 +94,41 @@ must_drop = {
 for label, needle in must_drop.items():
     check(f"已删 {label}", needle not in P)
 
+print("\n=== 结构性规则必须在「写它的那个章节」里（v0.3.25 live 回归）===")
+# v0.3.25 实测事故：重排 prompt 时把 [GENDER:xx] 从 §4（visual 章节）挪到了
+# §5（characters 章节），结果 LLM 写 visual 时根本看不到那条要求 ——
+# live 冒烟 0/10 页带标记（改之前是 10/10）。规则放在错误的章节 = 规则不存在。
+# 下面这些断言的是"规则与它约束的字段在同一章节"，不只是"全文出现过"。
+SECTION_RULES = [
+    ("[GENDER:xx] 在 visual 章节", "### 4.5", "[GENDER:male]"),
+    ("CONCEPT 在七要素之前", "### 4.1", "必须在 SUBJECT 之前"),
+    ("中文速记在七要素章节", "### 4.2", "**每段末尾必须追加"),
+    ("零文字在 visual 章节", "### 4.6", "STRICT NO TEXT"),
+    ("dialogue 必填在 §3", "### 3.4", "每一页都要写"),
+    ("三拍结构在 §3", "### 3.1", "说破"),
+    ("术语翻译在 §3", "### 3.2", "术语（大白话解释）"),
+    ("朝代考据在 §7", "## 7.", "三件错配"),
+]
+for label, section, needle in SECTION_RULES:
+    idx = P.find(section)
+    check(f"{label}", idx >= 0 and needle in P[idx:idx + 2600],
+          "章节缺失或规则不在该章节附近" if idx >= 0 else "章节不存在")
+
+# 反向：GENDER 规则不许只出现在 §5（characters）而不在 §4
+i45 = P.find("### 4.5")
+i5 = P.find("## 5. characters[]")
+i6 = P.find("## 6. 输出格式")
+check("§4.5 之前就有 GENDER 三值枚举（不是只在 §5 引用）",
+      i45 >= 0 and "[GENDER:female]" in P[i45:i45 + 2600])
+# §5 只许引用 §4.5，不许再抄一份三值枚举（第二份复制品 = 下次重排又会漂）
+check("§5 里 GENDER 只作引用、不重复正文",
+      "见 **§4.5 c**" in P and i5 > 0 and i6 > i5
+      and "[GENDER:mixed]" not in P[i5:i6],
+      f"§5 区间内 [GENDER:mixed] 出现 {P[i5:i6].count('[GENDER:mixed]')} 次")
+
 print("\n=== 朝代速查表已移出 system prompt（改条件注入）===")
-check("planner prompt 内不再内联速查表", "春秋战国（前770-前221）" not in P)
 check("仍保留 era 规则摘要", "朝代服饰考据" in P)
+check("planner prompt 内不再内联速查表", "春秋战国（前770-前221）" not in P)
 
 print("\n=== 条件注入：历史风格必须拿回速查表 ===")
 from scripts.core.planner import build_system_prompt, _CN_HISTORY_STYLES  # noqa: E402

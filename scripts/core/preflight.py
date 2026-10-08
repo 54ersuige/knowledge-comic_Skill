@@ -176,7 +176,8 @@ def _f_kw(p: dict) -> list[Finding]:
     if not kws:
         out.append(Finding(p["page"], "block", "KW_EMPTY",
                            "keywords 为空 —— 朱砂红高亮整条链路会失效",
-                           f"planner prompt 铁律 5 要求 {KW_MIN}-{KW_IDEAL} 个；不满足就会渲染不出高亮"))
+                           f"planner prompt §2 字段表（keywords 行）要求 {KW_MIN}-{KW_IDEAL} 个；"
+                           f"不满足就会渲染不出高亮"))
     elif len(kws) > KW_MAX:
         out.append(Finding(p["page"], "warn", "KW_TOO_MANY",
                            f"keywords {len(kws)} 个偏多，正文里会碎成一片",
@@ -763,7 +764,7 @@ def _f_punchline(p: dict) -> list[Finding]:
                            "缺 punchline —— 「定格瞬间」是本章节的记忆点"))
     elif len(pl) > PUNCH_MAX:
         # v0.3.24：原先写死 30，但同一条的文案却告诉用户「10-22 字」——
-        # 代码和自己的提示自相矛盾。按 prompt 铁律 7.2 的 22 收口。
+        # 代码和自己的提示自相矛盾。按 prompt §2 字段表 punchline 行的 22 收口。
         out.append(Finding(p["page"], "warn", "PUNCH_LONG",
                            f"punchline {len(pl)} 字偏长，记忆点要短（{PUNCH_MAX} 字内）"))
     return out
@@ -775,7 +776,7 @@ def _f_dialogue(p: dict) -> list[Finding]:
         return [Finding(p["page"], "warn", "QUOTE_EMPTY",
                         "缺文言引文 —— 图下蒙版会空着")]
     if len(d) > QUOTE_MAX:
-        # v0.3.24：原先放行到 90 字，与 prompt 铁律 7.1 的 50 字上限脱节。
+        # v0.3.24：原先放行到 90 字，与 prompt §3.4 dialogue 的 50 字上限脱节。
         out = [Finding(p["page"], "warn", "QUOTE_LONG",
                        f"文言引文 {len(d)} 字偏长，蒙版放不下（{QUOTE_MAX} 字内）")]
         return out

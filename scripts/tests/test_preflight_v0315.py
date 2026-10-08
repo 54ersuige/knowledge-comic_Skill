@@ -224,8 +224,8 @@ def test_pinyin_character_recognized() -> None:
 
 
 def test_dialogue_rule_is_mandatory() -> None:
-    """铁律 7.1 必须保持"每页必填"（实测 0/10 的防回退断言）。"""
-    print("\n[7] dialogue 铁律防回退")
+    """§3.4 必须保持"每页必填"（实测 0/10 的防回退断言）。"""
+    print("\n[7] dialogue 规则防回退")
     from scripts.core.planner import PLANNER_SYSTEM_PROMPT
     check("含'每页必填'", "每页必填" in PLANNER_SYSTEM_PROMPT)
     check("含'不允许留空'", "不允许留空" in PLANNER_SYSTEM_PROMPT)

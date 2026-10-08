@@ -392,7 +392,23 @@ MOOD: solemn duty, desaturated blue-white palette // 庄严 克制的蓝白
   proportions typical of classical Chinese figure painting, age 20-30, serene expression"
 - ❌ 禁止「现代科学家」出现在历史典故里 / 「古代人物」出现在 AI 算法主题里
 
-**c) 表情** —— **绝不能**用 "defiant" / "sad" / "scared" 这种情绪形容词，模型画不出来。
+**c) [GENDER:xx] 标记（每页必写）** —— 位置固定在 **visual 第二行**
+（角色五件套之后、`ACTION:` 之前），三选一：
+
+- `[GENDER:male]` — 单人物为男性（历史典故主角最常见，如张巡 / 郭子仪 / 文天祥）
+- `[GENDER:female]` — 单人物为女性（如王昭君 / 杨贵妃 / 武则天）
+- `[GENDER:mixed]` — 男女混合场景（夫妻对坐 / 将军审问叛军女眷）
+
+图像 prompt 会按它自动选对应妆发分支（女性桃花腮/步摇 / 男性玉冠/玉簪/剑眉）。
+**漏标记或写错，男性主角会被画成女子脸，整批图全崩** —— 实测有角色因缺
+gender 被画成女性，污染了全部含他的页面。所以这一行**不允许空**。
+
+示例：
+- ✅ `SUBJECT: Zhang Xun, 40yo general... [GENDER:male] ACTION: he grips his sword...`
+- ✅ `SUBJECT: Wang Zhaojun... [GENDER:female] ACTION: she plays the pipa...`
+- ✅ `SUBJECT: Zhang Xun and his wife [GENDER:mixed] ACTION: they examine a map...`
+
+**d) 表情** —— **绝不能**用 "defiant" / "sad" / "scared" 这种情绪形容词，模型画不出来。
 每页从下面 8 个 expression anchor 中选 1 个，用可执行的面部元素而非情绪词：
 
 - `neutral` — 沉静闭唇，眉眼放松，平视前方
@@ -404,7 +420,7 @@ MOOD: solemn duty, desaturated blue-white palette // 庄严 克制的蓝白
 - `tender_grief` — 眼低垂，告别时微微颤抖的笑，手伸向画外某人，眼未落泪
 - `fierce_command` — 下巴前伸，目光锁定观者，双眉平压威仪，手臂前伸持物，嘴张开发令
 
-**d) 画面与 caption 严格匹配** —— 每页 visual 的 ACTION 段必须包含 caption 的核心动作/事件：
+**e) 画面与 caption 严格匹配** —— 每页 visual 的 ACTION 段必须包含 caption 的核心动作/事件：
 - caption 含「砍断指头」→ visual 必须有「刚砍断 / 裹血布 / 桌上有刀」
 - caption 含「36 将尽死」→ visual 必须有「倒下尸体堆 + 多人战斗」
 - caption 含「城破火光」→ visual 必须有「火球 / 烟柱 / 城破洞」
@@ -467,12 +483,7 @@ armor is PLAIN unadorned, no characters on blade.
 - ✅ 每页 visual 开头**完整重复**该角色在 `characters[]` 里的视觉签名翻译
   （不只是 "the man" 或 "Guo Ziyi"）
 - ✅ 多角色场景里每个角色的核心特征都必须出现
-- ✅ **第二行写 `[GENDER:xx]` 标记**（角色描述之后、ACTION 之前），三选一：
-  - `[GENDER:male]` — 单人物为男性（历史典故主角最常见，如张巡 / 郭子仪 / 文天祥）
-  - `[GENDER:female]` — 单人物为女性（如王昭君 / 杨贵妃 / 武则天）
-  - `[GENDER:mixed]` — 男女混合场景（夫妻对坐 / 将军审问叛军女眷）
-  图像 prompt 会按它自动选对应妆发分支（女性桃花腮/步摇 / 男性玉冠/玉簪/剑眉）。
-  漏标记或写错会导致男性主角被性转成女子脸。
+- ✅ visual 第二行的 `[GENDER:xx]` 标记（规则与取值见 **§4.5 c**）
 - ❌ 不要用代词（"he" / "the general" / "the khan"）省略人物身份
 
 ## 6. 输出格式（严格 JSON，不要任何解释文字，不要 markdown 代码块）
@@ -611,6 +622,105 @@ def _clamp_body(text: str) -> str:
     return head
 
 
+class LLMNotConfigured(RuntimeError):
+    """没有配 LLM_API_KEY —— 这是**合法的离线模式**，允许降级到 mock。
+
+    与"配了 key 但调用失败 / 返回解析不了"严格区分：后者是真故障，
+    必须当场炸给用户看，不能悄悄换成一份没有 keywords、没有 [GENDER] 的
+    mock 分镜（那会让朱砂高亮和性别锚点整条链路死掉，用户要到审阅阶段
+    才发现，2026-10-08 live 冒烟就是这样被坑了一次）。
+    """
+
+
+def _raw_decode_first_object(text: str) -> dict | None:
+    """用 stdlib 的 JSONDecoder 从第一个 '{' 处解出一个完整对象。
+
+    为什么用 `raw_decode` 而不是数大括号：它就是 json 自己的扫描器，
+    正确处理字符串字面量与转义，遇到第一个完整 JSON 值就停，**尾部有多余
+    文字也不影响**。手写大括号计数两个都做不到。
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+    try:
+        obj, _end = json.JSONDecoder().raw_decode(text[start:])
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _extract_json(content: str) -> tuple[dict | None, list[str]]:
+    """从 LLM 响应里尽最大努力提取 JSON 对象。
+
+    返回 (数据, 尝试过的方法列表)。全部失败时数据为 None，列表能直接进
+    报错信息 —— 静默失败是本项目最讨厌的东西。
+
+    顺序按可靠度：
+      1. 整段直接 json.loads（模型不加围栏时的常见情况，也是最快的）
+      2. ```json``` / ``` 围栏内提取
+      3. 剥掉 <think>...</think>（thinking 模式）
+      4. 从第一个 '{' 做 raw_decode（容忍尾部多余文字、容忍前面有寒暄）
+    """
+    tried: list[str] = []
+
+    def _try_direct(s: str, label: str) -> dict | None:
+        s = s.strip()
+        if not s:
+            return None
+        try:
+            obj = json.loads(s)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(obj, dict):
+            tried.append(f"{label}:ok")
+            return obj
+        tried.append(f"{label}:not-dict")
+        return None
+
+    data = _try_direct(content, "direct")
+    if data is not None:
+        return data, tried
+
+    # 围栏：支持 ```json / ```JSON / 裸 ```
+    m = re.search(r"```(?:json|JSON)?[ \t]*\r?\n(.*?)\r?\n?[ \t]*```", content, re.S)
+    if m:
+        tried.append("fence:hit")
+        data = _try_direct(m.group(1), "fence")
+        if data is not None:
+            return data, tried
+    else:
+        tried.append("fence:miss")
+
+    # thinking 模式：<think>...</think> 之后才是正文
+    stripped = content
+    if "<think>" in content and "</think>" in content:
+        stripped = content.split("</think>", 1)[1]
+        tried.append("think:stripped")
+    else:
+        tried.append("think:none")
+
+    data = _try_direct(stripped, "after-think")
+    if data is not None:
+        return data, tried
+
+    data = _raw_decode_first_object(content)
+    tried.append("raw_decode:ok" if data is not None else "raw_decode:fail")
+    if data is not None:
+        return data, tried
+
+    # 最后兜底：所有围栏内容拼起来试一次
+    all_blocks = re.findall(r"```(?:json|JSON)?[ \t]*\r?\n(.*?)\r?\n?[ \t]*```",
+                            content, re.S)
+    if len(all_blocks) > 1:
+        tried.append(f"multi-fence({len(all_blocks)})")
+        merged = "\n".join(b.strip() for b in all_blocks)
+        data = _raw_decode_first_object(merged)
+        if data is not None:
+            return data, tried
+
+    return None, tried
+
+
 def _call_llm_storyboard(
     topic: str,
     bullets: list[str],
@@ -625,7 +735,9 @@ def _call_llm_storyboard(
     """
     cfg = get_config()
     if not cfg.llm_api_key or cfg.llm_api_key.startswith("sk-placeholder"):
-        raise RuntimeError(
+        # 专门的异常类型：这是**合法的离线模式**（没配 key 就该走 mock），
+        # 与"配了 key 但调用/解析失败"必须区别对待，见 plan_storyboard。
+        raise LLMNotConfigured(
             "LLM_API_KEY not configured. Fill it in .env, "
             "or call mock_storyboard() instead."
         )
@@ -670,51 +782,31 @@ def _call_llm_storyboard(
             f"model={cfg.llm_model}, base_url={cfg.llm_base_url}"
         )
 
-    # MiniMax M3 开启 thinking 模式：content 包含 <think>...</think> + JSON
-    # 提取 ```json ... ``` 块 或 最后一对 {...}
-    data = None
-    # 1) markdown 块（用最外层大括号提取，避免非贪婪匹配到内部 }）
-    m = re.search(r"```(?:json)?\s*\n([\s\S]*?)\n\s*```", content)
-    if m:
-        block = m.group(1).strip()
-        brace_start = block.find("{")
-        if brace_start >= 0:
-            depth = 0
-            for i in range(brace_start, len(block)):
-                if block[i] == "{":
-                    depth += 1
-                elif block[i] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        candidate = block[brace_start:i + 1]
-                        try:
-                            data = json.loads(candidate)
-                            break
-                        except json.JSONDecodeError:
-                            pass
+    # --- 提取 JSON ---------------------------------------------------------
+    #
+    # v0.3.24 重写。原实现是「数大括号找最外层 {...}」，有两个真实缺陷：
+    #   1. **大括号计数不认字符串字面量**。visual 字段里只要出现一个不平衡的
+    #      { 或 }（英文缩写、代码片段、引文里的大括号），depth 就再也回不到 0，
+    #      整段解析失败。
+    #   2. 同理，尾部有多余文字时（模型爱在 JSON 后面补一句"以上"）也会连带失败。
+    # 2026-10-08 live 冒烟实测踩中：LLM 明显返回了合法 JSON（finish_reason=stop、
+    # 括号闭合、content 16K 字符），却被判成 "LLM returned non-JSON"，
+    # **静默降级到 mock** —— 表现是 10 页全部没有 keywords、没有 [GENDER]，
+    # 一直到审阅阶段才炸出 30 个 error。temperature=0.7 所以是偶发的。
+    #
+    # 现在按可靠度从高到低试，每层都记录尝试过什么，失败时报错信息能定位到层。
+    data, tried = _extract_json(content)
     if data is None:
-        # 2) 整段 content 中找最外层 {...}
-        brace_start = content.find("{")
-        if brace_start >= 0:
-            depth = 0
-            for i in range(brace_start, len(content)):
-                if content[i] == "{":
-                    depth += 1
-                elif content[i] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        try:
-                            data = json.loads(content[brace_start:i + 1])
-                            break
-                        except json.JSONDecodeError:
-                            pass
-    if data is None:
-        try:
-            data = json.loads(content)
-        except json.JSONDecodeError:
-            raise RuntimeError(
-                f"LLM returned non-JSON. Content (first 500 chars): {content[:500]!r}"
-            )
+        tail = content[-300:]
+        raise RuntimeError(
+            "LLM returned non-JSON. "
+            f"tried={tried} | len={len(content)} | "
+            f"finish_reason={getattr(resp.choices[0], 'finish_reason', '?')}\n"
+            f"  head(300): {content[:300]!r}\n"
+            f"  tail(300): {tail!r}"
+        )
+    if not isinstance(data, dict):
+        raise RuntimeError(f"LLM JSON top level is {type(data).__name__}, expected object")
 
     pages = [
         StoryPage(
@@ -869,6 +961,7 @@ def plan_storyboard(
     use_llm: bool = True,
     canon_injection: str = "",
     num_pages: int | None = None,
+    allow_mock_fallback: bool = False,
 ) -> Storyboard:
     """Step 1: 主题 + 要点 → storyboard JSON。
 
@@ -876,17 +969,34 @@ def plan_storyboard(
         topic: 主题
         bullets: 要点列表
         style_id: 风格 ID
-        use_llm: 是否调 LLM（False = mock）
+        use_llm: 是否调 LLM（False = 直接 mock，不尝试调用）
         canon_injection: 一致性约束注入
         num_pages: 显式指定页数（None = 按 recommend_pages 自动推荐）
+        allow_mock_fallback: 配了 key 但 LLM 调用/解析失败时，是否仍降级到 mock。
+            **默认 False = 当场抛错**。v0.3.24 之前是无条件降级，而 mock 分镜
+            没有 keywords、没有 [GENDER]，等于把整条高亮/性别链路静默废掉，
+            用户要等到 preflight 阻塞或审阅爆出几十个 error 才发现。
+            只有显式传 True 才会降级（CI / 离线批量场景）。
+            **没配 key 不受这个开关影响** —— 那是合法离线模式，照样降级。
     """
-    if use_llm:
-        try:
-            # v0.3.2 修复：原先漏传 num_pages，导致用户显式指定的页数在真 LLM 路径被丢弃
-            return _call_llm_storyboard(
-                topic, bullets, style_id, canon_injection, num_pages=num_pages
-            )
-        except RuntimeError as e:
-            logger.warning("LLM unavailable (%s), falling back to mock storyboard", e)
+    if not use_llm:
+        return mock_storyboard(topic, bullets, style_id, num_pages)
+
+    try:
+        # v0.3.2 修复：原先漏传 num_pages，导致用户显式指定的页数在真 LLM 路径被丢弃
+        return _call_llm_storyboard(
+            topic, bullets, style_id, canon_injection, num_pages=num_pages
+        )
+    except LLMNotConfigured as e:
+        # 合法离线模式：明确告知后降级
+        print(f"[plan] [warn] {e}\n"
+              f"[plan] [warn] 降级为 mock 分镜 —— 这是占位稿，没有 keywords / "
+              f"[GENDER]，跑图前 preflight 会拦。配好 LLM_API_KEY 后请重跑。",
+              flush=True)
+        return mock_storyboard(topic, bullets, style_id, num_pages)
+    except RuntimeError as e:
+        if allow_mock_fallback:
+            print(f"[plan] [warn] LLM 失败且 allow_mock_fallback=True，降级为 mock: {e}",
+                  flush=True)
             return mock_storyboard(topic, bullets, style_id, num_pages)
-    return mock_storyboard(topic, bullets, style_id, num_pages)
+        raise

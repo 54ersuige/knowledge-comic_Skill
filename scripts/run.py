@@ -105,6 +105,7 @@ def step_plan(
     characters: list[dict] | None = None,
     use_llm: bool = True,
     data_dir: Path | None = None,
+    allow_mock_fallback: bool = False,
 ) -> tuple[Storyboard, str, Path]:
     """Step 1: 主题 + 要点 → storyboard JSON + job_id + work_dir
 
@@ -120,6 +121,12 @@ def step_plan(
                         {"name": "药葛罗", "role": "回纥可汗", ...}, ...]
         use_llm: 是否调 LLM（False=mock）
         data_dir: 数据目录
+        allow_mock_fallback: 配了 key 但 LLM 调用/解析失败时是否仍降级到 mock。
+            **默认 False = 当场抛错**。v0.3.24 之前无条件降级，而 mock 分镜
+            没有 keywords / [GENDER]，等于把朱砂高亮与性别锚点整条链路静默
+            废掉 —— 2026-10-08 live 冒烟就是这样被坑了一次，10 页全空却
+            "跑完了"。只有 CI / 离线批量场景才需要传 True。
+            没配 LLM_API_KEY 不受此开关限制（那是合法离线模式，照样降级）。
 
     Returns:
         (storyboard, job_id, work_dir)
@@ -159,7 +166,7 @@ def step_plan(
         print(f"[canon] 已注入一致性约束 {len(canon_inj)} 字符")
 
     sb = plan_storyboard(topic, bullets, style_id, use_llm=use_llm, num_pages=num_pages,
-                         canon_injection=canon_inj)
+                         canon_injection=canon_inj, allow_mock_fallback=allow_mock_fallback)
 
     # v0.2.5/0.2.6: 人物一致性 — characters 列表挂到 storyboard
     if characters:

@@ -49,11 +49,11 @@ KEYWORDS_MAX = 6       # 超过 6 个 → 正文里碎成一片，反而看不�
 
 # --- punchline（「定格瞬间」白话金句）------------------------------------
 PUNCH_MIN = 10
-PUNCH_MAX = 22         # 与 planner prompt 铁律 7.2 一致
+PUNCH_MAX = 22         # 与 planner prompt §2 字段表 punchline 行一致
 
 # --- dialogue（文言原文引句，叠图下缘蒙版）------------------------------
 QUOTE_MIN = 8
-QUOTE_MAX = 50         # 与 planner prompt 铁律 7.1 一致
+QUOTE_MAX = 50         # 与 planner prompt §3.4 dialogue 上限一致
 
 # --- visual（画面描述）---------------------------------------------------
 VISUAL_MIN = 300       # 太短说明七要素没写全

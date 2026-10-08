@@ -1,12 +1,74 @@
 ---
 name: knowledge-comic
 description: Knowledge comic generator that turns a topic + bullet list into a publication-ready WeChat MP draft. Use when user asks for "知识漫画", "公众号知识漫画", "科普漫画", "典故解读", "历史故事漫画", "一图读懂", "科普文章配图". Hands off the entire pipeline — style recommendation, storyboard split, image generation, article HTML render, and WeChat draft creation — through step-by-step Python APIs that Mavis calls directly inside the conversation.
-version: 0.3.24
+version: 0.3.25
 ---
 
-# Knowledge Comic (WeChat MP) — v0.3.24
+# Knowledge Comic (WeChat MP) — v0.3.25
 
 把「主题 + 要点」变成可一键发布到公众号草稿箱的知识漫画图文。**端到端在 Mavis 对话里逐步执行 + 用户拍板**。
+
+## v0.3.25 核心变化（2026-10-08，live 验证抓出的静默降级）
+
+**背景**：v0.3.24 重写了 22K 的 planner prompt，但**没有用真 LLM 验证过**。
+补跑 `test_live_smoke.py --live` 立刻炸出一个真问题 —— 也说明
+**改了驱动全部生成的 prompt 却不做 live 验证，等于没改**。
+
+### 1. 【真故障】LLM 返回合法 JSON，却被判「non-JSON」并静默降级到 mock
+
+live 冒烟报「每页都有 keywords 0/10」「每页都有 [GENDER] 0/10」。
+抓原始响应后发现：**LLM 返回的是完全合法的 JSON** ——
+`finish_reason=stop`（没被截断）、大括号闭合、16,217 字符、
+content 首尾截取 `json.loads` **直接成功**、而且 `"gender": "male"`
+正是裸字符串（v0.3.24 那个阻塞级修复生效了）。
+
+**根因**：旧解析层靠**手写大括号计数**找最外层 `{...}`，有两个真实缺陷：
+1. **大括号计数不认字符串字面量** —— visual/正文/引文里出现一个不平衡的
+   `{` 或 `}`（英文缩写、引文、代码片段），`depth` 再也回不到 0，整段失败
+2. 尾部有多余文字（模型爱在 JSON 后面补一句"以上"）同样连带失败
+
+`temperature=0.7`，所以是**偶发的** —— 也就是说"看起来跑通了"。
+
+**修复**：改用 stdlib 的 `JSONDecoder.raw_decode`（json 自己的扫描器，
+正确处理字符串与转义，解析完第一个完整 JSON 值即停、**尾部多余内容不影响**），
+并按可靠度分 4 层尝试：整段直解 → ```json``` 围栏 → 剥 `<think>` →
+`raw_decode` → 多围栏合并。失败时报错信息带上**尝试记录 + `finish_reason` +
+首尾各 300 字符**，能一眼分清"是解析问题还是 LLM 截断"。
+
+### 2. 【更严重】解析失败会**静默降级**到 mock
+
+`plan_storyboard` 捕获 `RuntimeError` 后无条件 `return mock_storyboard(...)`。
+而 **mock 分镜没有 `keywords`、没有 `[GENDER:xx]`** —— 等于把朱砂红高亮和
+性别锚点**整条链路静默废掉**。用户看到的只是"跑完了"，一路拖到审阅阶段
+才炸出 30 个 error，再往后跑图会烧额度。
+
+**修复：把"合法的离线模式"和"真故障"拆成两类。**
+
+| 场景 | 行为 |
+|---|---|
+| `use_llm=False` | 直接 mock，不调 LLM |
+| **没配 `LLM_API_KEY`**（`LLMNotConfigured`） | **合法离线模式** → 降级 + 明确告知 |
+| 配了 key 但调用/解析失败，`allow_mock_fallback=False`（**默认**） | **当场抛错**，带可诊断信息 |
+| 同上 + `allow_mock_fallback=True` | 降级（仅 CI / 离线批量场景用） |
+
+`allow_mock_fallback` 已从 `plan_storyboard` 透传到 `run.py` 的 `step_plan`。
+
+### 3. 修 v0.3.24 重编号留下的过期交叉引用
+
+把 prompt 章节重编号成 §1~§7 后，代码与文档里 8 处引用仍指向旧的"铁律 N"：
+`preflight.py`（keywords/punchline/dialogue 三处）、`thresholds.py`（两处）、
+`test_preflight_v0315.py`、`references/style_guide.md` §2.5.1/§2.5.2。
+不影响运行，但会把下一个读代码的人引到 prompt 里不存在的地方 ——
+与本项目反复栽跟头的文档漂移同源。全部改到新编号。
+
+### 4. 新增 3 个测试文件（不烧额度）
+
+- `test_json_extract_v0324.py`（24 项）—— JSON 提取层：围栏 / `<think>` 前缀 /
+  **尾部多余文字** / **字符串里不平衡的大括号**（旧实现必挂的两种形态）/ 转义往返
+- `test_fallback_v0324.py`（11 项）—— 降级契约四象限，用桩函数替掉 LLM 调用
+- `test_drift_v0324.py`（v0.3.24）—— CRLF/LF/BOM/老式 CR 四种表示必须同哈希
+
+**当前：11 个测试文件全绿，`ruff check scripts/` 0 error。**
 
 ## v0.3.24 核心变化（2026-10-08，可观察性 + 结构性瘦身）
 
@@ -926,7 +988,8 @@ INTERNALERROR 整个 session 崩掉。`run_tests.py` 用子进程逐个跑并汇
 
 ## 变更记录
 
-- **0.3.24**（2026-10-08）：可观察性 + 结构性瘦身。① **【阻塞级】** planner prompt 里的"严格 JSON"示例本身非法（`{"enum": [...]}` 教 LLM 输出嵌套对象 → `CHAR_GENDER_MISSING` 阻塞 → 一张图不跑；`characters` 是两段对象拼接；`sources` 未转义引号），且 v0.3.22 的测试把这个 bug 锁成了规范，已一并改写；② 跑图接 `progress_cb`（`image_gen` 早有该形参，`run.py` 两处都没传，3-6 分钟零输出），角色参考图同步补齐；③ 新增 `run_tests.py`（`pytest scripts/tests` 是 INTERNALERROR rc=3，7 个 standalone 脚本只能手敲），现 7/7 约 8s；④ 新增 `core/thresholds.py` 单一真源，收敛 6 处已实证漂移（body 150 warn vs error、keywords<3 preflight 漏检、punchline 实按 30 但文案写 22…），修 `review_page` 的陈旧语义并补 `KW_TOO_FEW`；⑤ system prompt 22,064 → 14,578（历史）/ 13,297（非历史），删版本考古 + 事故复盘 + 6 处重复的"角色一致性"，朝代速查表改按风格条件注入（`build_system_prompt`）；⑥ canon 约束在主流程一直是死的（只有 `run_plain.py` 调），接线前先把黑死病专属数据的 `data/canon.md` 存为 `canon.blackdeath.md`、主文件换空模板（注入实测 0）；⑦ 新增 `check_drift.py` 自动化真源↔镜像校验（实测镜像已漂移 6 处、缺 v0.3.18 修复）；⑧ 卫生：v0.3.23 补提交、SKILL.md 版本号对齐、`diagnose_*.py` 归 `_archive/`、根目录 9 个临时文件清理
+- **0.3.25**（2026-10-08）：live 验证抓出的静默降级。① **【真故障】** LLM 返回**合法 JSON**（`finish_reason=stop`、括号闭合、16K 字符、`json.loads` 直解成功）却被旧解析层判「non-JSON」—— 根因是旧实现**手写大括号计数、不认字符串字面量**，visual/正文里一个不平衡的 `{`/`}` 或 JSON 尾部多余文字都会整段失败；`temperature=0.7` 所以是偶发的，看起来像"跑通了"。改用 stdlib `JSONDecoder.raw_decode` + 4 层尝试，报错带尝试记录与 `finish_reason`。② **【更严重】** 解析失败会**静默降级**到 mock，而 mock 没有 `keywords`/`[GENDER]`，等于把朱砂高亮与性别锚点整条链路废掉，拖到审阅阶段才炸 30 个 error。现在拆成两类：没配 key = 合法离线模式照旧降级；配了 key 但调用/解析失败 = **默认当场抛错**，`allow_mock_fallback=True` 才降级（已透传到 `step_plan`）。③ 修 v0.3.24 重编号后遗留的 8 处过期「铁律 N」交叉引用。④ 新增 `test_json_extract_v0324.py`（24 项）、`test_fallback_v0324.py`（11 项）、`test_drift_v0324.py`。测试 11/11，lint 0
+- **0.3.24**（2026-10-08）：可观察性 + 结构性瘦身。① **【阻塞级】** planner prompt 里的"严格 JSON"示例本身非法（`{"enum": [...]}` 教 LLM 输出嵌套对象 → `CHAR_GENDER_MISSING` 阻塞 → 一张图不跑；`characters` 是两段对象拼接；`sources` 未转义引号），且 v0.3.22 的测试把这个 bug 锁成了规范，已一并改写；② 跑图接 `progress_cb`（`image_gen` 早有该形参，`run.py` 两处都没传，3-6 分钟零输出），角色参考图同步补齐；③ 新增 `run_tests.py`（`pytest scripts/tests` 是 INTERNALERROR rc=3，standalone 脚本只能手敲）；④ 新增 `core/thresholds.py` 单一真源，收敛 6 处已实证漂移（body 150 warn vs error、keywords<3 preflight 漏检、punchline 实按 30 但文案写 22…）；⑤ system prompt 22,064 → 14,578（历史）/ 13,297（非历史），朝代速查表改按风格条件注入；⑥ canon 约束在主流程一直是死的（只有 `run_plain.py` 调），接线前先把黑死病专属数据的 `data/canon.md` 存为 `canon.blackdeath.md`、主文件换空模板；⑦ 新增 `check_drift.py` 自动化真源↔镜像校验（实测镜像已漂移 6 处）；⑧ lint 从 62 条清到 0（新增 `ruff.toml`），修 F601 重复 dict key，归档 3 个脚本
 - **0.3.23**（2026-09-30）：两个可移植性 bug —— ① Windows GBK 崩溃：报告标记 🔴/🟡 改纯文本 `[阻塞]`/`[建议]` + `run.py` 加 `_safe_stdout()` 安全网（**只在阻塞分支触发，体检通过时不崩，所以极易漏测**；Mavis 里因宿主重定向 stdout 测不出来）；② `玉璧` 假阳性：从 `ANACHRONIC_MARKERS` 移除（玉璧是春秋战国正统礼器，蔺相如完璧归赵即战国故事），原事故真正穿帮的是「金质发冠 + 繁复华丽丝绸」；③ 附带修 `test_preflight_v0315.py:271` 编码损坏字符（GBK 下 print 抛异常 → 逻辑全过但 rc=1）
 - **0.3.22**（2026-09-29）：性别锚点工程化收尾 —— JSON schema `gender` 改 `enum:["male","female"]`；`KNOWN_GENDER` 兜底表**停止兜底**（`CHAR_GENDER_MISSING` 转阻塞，planner 必须自己填）；MUST-SHOW fallback 复用 `_assemble` 不再 `assembled[:9790]` 硬切（否则砍掉 ZERO_TEXT_BOOST）；连环画强锚不再锚现代室内物；`preflight` / `visual_qa` 落盘 JSON 报告（`data/<job>/preflight_report.json` / `visual_qa_report.json`）
 - **0.3.21**（2026-09-30）：prompt 拼装唯一化 —— 原先主路径和超限截断路径有**两份几乎相同的拼装代码**，改一处漏另一处；统一为 `_assemble()`
