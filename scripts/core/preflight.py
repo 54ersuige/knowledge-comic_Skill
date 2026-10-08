@@ -344,17 +344,6 @@ _SEVEN_ELEMENT_LABELS = {
 }
 
 
-def _is_seven_element_label(line: str) -> bool:
-    """这行是七要素标签吗？（v0.3.17：排除它们，否则 GENDER_PARTIAL 10/10 误报）"""
-    m = re.match(r"^\[GENDER:\w+\]\s*", line)
-    if m:
-        line = line[m.end():]
-    m = re.match(r"^([A-Za-z][A-Za-z ]{0,20}?)\s*[:：]", line)
-    if not m:
-        return False
-    return m.group(1).strip().lower() in _SEVEN_ELEMENT_LABELS
-
-
 def _roles_registered(visual: str, p: dict, allowed: set[str]) -> bool:
     """本页主角是否有 gender 锚点来源？
 
@@ -580,6 +569,36 @@ def _f_no_text_decl(p: dict) -> list[Finding]:
 # 需要多个弱信号同现，或与强信号器物词同现，才判定为穿帮。
 _WEAK_ANACHRONISM = {"繁复", "华丽"}
 
+# v0.3.26：时代门槛 —— ANACHRONIC_MARKERS 里的「朝服类」词
+# （龙袍/补子/乌纱/蟒袍/顶戴/朝珠…）只对**前朝**才是穿帮。
+#
+# 实测事故（kc_1791440435 颐和园）：characters 里有乾隆（era=清中），
+# 签名写「戴双龙朝冠, 穿明黄色团龙袍」—— 这是清代皇帝的**正统朝服**，
+# 却被判 ERA_ANACHRONISM 阻塞。若按提示改成"素麻袍+发束高髻"，
+# 等于把乾隆画成先秦布衣，比穿帮更糟。
+#
+# 根因与 v0.3.15 那次判据反转同源：关卡把**合规写法**当违规 ——
+# 这张表是为"春秋吴王被写成明清帝王"设计的，却对清代角色照样开火。
+#
+# 修法：清（含明/元/宋等有朝服制度的时代）角色跳过朝服类词表。
+# 「现代器物」类（沙发/玻璃窗/机械钟…）对任何古代角色都仍是穿帮，不受此门槛影响。
+_ANACHRONIC_IMPERIAL_ONLY = {
+    "金质发冠", "龙袍", "龙纹", "补子", "乌纱", "乌纱帽", "官帽",
+    "朝服", "蟒袍", "雕龙", "补服", "顶戴", "翎羽", "朝珠",
+}
+
+# 有成熟朝服制度的时代 —— 这些角色穿龙袍/朝珠是正确的
+_ERA_WITH_IMPERIAL_DRESS = (
+    "清", "明", "元", "宋", "唐", "汉", "三国", "晋", "隋",
+    "高丽", "朝鲜", "越南", "日本", "蒙古", "辽", "金",
+)
+
+
+def _era_has_imperial_dress(era: str) -> bool:
+    """该 era 是否属于有朝服制度的时代（清/明/元/宋…）。"""
+    e = (era or "").strip()
+    return any(k in e for k in _ERA_WITH_IMPERIAL_DRESS)
+
 _NEGATION_CUES = ("no", "not", "without", "free of", "zero", "absence of",
                  "devoid of", "never", "avoid", "none of", "rather than",
                  "instead of", "not any")
@@ -593,17 +612,96 @@ _NEG_CONNECTORS = set(" \t\n()[]{},;:-—–/\\\"'")
 # 把几百字符前的 NOT 误配给后面的词）
 _NEG_MAX_GAP = 40
 
+# 否定作用域可以跨越的「枚举项」分隔符。
+#
+# v0.3.26 修复（实测 kc_1791440435 颐和园 12/12 页全误报）：
+# planner 的标准零文字声明是
+#     `NO characters/symbols/inscriptions`
+# —— 否定词 NO 后面跟了一个**用 / 分隔的枚举**，被检词 `inscriptions`
+# 是这个枚举的第三项。旧实现要求"否定词与被检词之间只能隔连接符"
+# （`_negated_before` 里 `all(ch in _NEG_CONNECTORS for ch in between)`），
+# 撞上枚举项里的实词 `characters` 就判定否定作用域已断 → 误报阻塞。
+#
+# 后果很严重：12/12 页被拦，一张图都跑不了，而且拦的正是最标准的合规写法。
+# 这与 v0.3.15 那次判据反转事故同源 —— 关卡把合规写法当违规。
+#
+# 修法：扫描否定线索时，若中间片段是「词 / 词 / 词」形式的枚举，
+# 允许跳过整个枚举继续往左找否定词。单个实词仍然会终止作用域
+# （`no text here, banner is red` 里的 banner 依然该被拦）。
+_ENUM_SEPARATORS = "/、,，•"
+# strip() 不接集合，预拼成字符串
+_NEG_CONNECTOR_STR = "".join(_NEG_CONNECTORS)
+
 
 def _negated_before(text_lower: str, i: int) -> bool:
-    """位置 i 之前是否处于否定作用域内。"""
+    """位置 i 之前是否处于否定作用域内。
+
+    v0.3.26：支持跳过 `NO characters/symbols/inscriptions` 这类枚举。
+    做法是**在原判据之外**加一条枚举规则：若否定词与被检词之间是
+    「否定词 + 词(/词)+」的纯枚举形态，则算否定作用域成立。
+    原判据（否定词与被检词之间只隔连接符）保持不变 —— 它的
+    `no banner`、`(NOT calligraphy)`、`无繁复纹样` 三条行为都依赖它。
+    """
     window = text_lower[max(0, i - _NEG_MAX_GAP):i]
-    # 从右往左扫，遇连接符继续，遇非连接符的实词终止
+
+    # --- 原判据：否定词与被检词之间只隔连接符 ---
     for cue in _NEGATION_CUES:
         pos = window.rfind(cue)
         if pos < 0:
             continue
         between = window[pos + len(cue):]
         if all(ch in _NEG_CONNECTORS for ch in between):
+            return True
+
+    # --- v0.3.26 新增：否定词 + 枚举项（词 / 词 / 词）---
+    return _negation_enumeration_before(window)
+
+
+def _negation_enumeration_before(window: str) -> bool:
+    """window 是否形如 `<否定词>词1/词2/…/词N`，且词N 紧邻被检词。
+
+    只认这一种形态。判据：
+      1. 从右往左，词与词之间**只能**是 `_ENUM_SEPARATORS`
+      2. 最左端必须是一个否定线索
+    因此 `no text here, a banner` 不成立（词之间是普通词 `here`），
+    `no characters/symbols/inscriptions` 成立。
+    """
+    # 从右往左切枚举项：项之间只允许枚举分隔符
+    parts = re.split(f"[{re.escape(_ENUM_SEPARATORS)}]", window)
+    # 丢掉因分隔符产生的空段（`a/b/` 尾部会切出 ""）
+    parts = [p for p in parts if p.strip(_NEG_CONNECTOR_STR)]
+
+    # `NO characters/symbols/X` 中检查 `symbols` 时，窗口只剩
+    # `no characters/` → 切出 1 段。此时靠"段尾紧邻枚举分隔符"补判：
+    # 说明被检词后面确实还有同一条枚举的下一项。
+    if len(parts) == 1:
+        # window 是被检词**之前**的文本。它以枚举分隔符结尾（如
+        # `no characters/`），说明被检词紧跟在该枚举项之后。
+        return window.endswith(tuple(_ENUM_SEPARATORS))
+    if not parts:
+        return False
+
+    # 右侧各项（除最左一项）必须都是「词 + 连接符」，不得夹带实词。
+    # 但被检词所在的**最右段**可以带尾随子句
+    # （`NO characters/symbols/inscriptions, plain fabric` 里末段是
+    #  `inscriptions, plain fabric`）—— 那属于同一条声明的后续描述。
+    for raw in reversed(parts[1:-1]):
+        if len(raw.strip(_NEG_CONNECTOR_STR).split()) > 1:
+            return False
+
+    # 被检词所在的末段：首词必须紧邻枚举分隔符（即它确实是枚举的一项）
+    tail = parts[-1].strip(_NEG_CONNECTOR_STR).split()
+    if not tail:
+        return False
+
+    # 最左一项 = 否定线索 + 可选一个词头
+    head = parts[0]
+    for cue in _NEGATION_CUES:
+        if cue not in head:
+            continue
+        after = head[head.rfind(cue) + len(cue):]
+        # 否定线索之后只允许连接符或单个词头
+        if len(after.strip(_NEG_CONNECTOR_STR).split()) <= 1:
             return True
     return False
 
@@ -717,9 +815,14 @@ def _f_era_anachronism(storyboard, p: dict) -> list[Finding]:
     for c in chars:
         nm = c.get("name") if isinstance(c, dict) else c
         sig = (c.get("visual_signature", "") if isinstance(c, dict) else "") or ""
+        era = (c.get("era", "") if isinstance(c, dict) else "") or ""
         # v0.3.18：用 _positive_mention 过滤否定语境 ——
         # 苏武签名里的「无繁复纹样」是最合规的写法，不能被「繁复」命中。
         hits = [w for w in ANACHRONIC_MARKERS if _positive_mention(sig, w)]
+        # v0.3.26 时代门槛：有朝服制度的时代（清/明/元/宋…）穿龙袍朝珠
+        # 是正统形制，不算穿帮 —— 否则会把乾隆画成先秦布衣。
+        if _era_has_imperial_dress(era):
+            hits = [w for w in hits if w not in _ANACHRONIC_IMPERIAL_ONLY]
         # 「繁复/华丽」是弱信号：单独出现时可能只是形容神态，
         # 只有与**器物**同现（"华丽的丝绸袍" vs "神情华丽"）才算穿帮。
         weak = [w for w in hits if w in _WEAK_ANACHRONISM]
@@ -729,13 +832,17 @@ def _f_era_anachronism(storyboard, p: dict) -> list[Finding]:
         hits = strong + weak[:1]
         affected = pages_by_char.get(nm, [])
         where = f"影响 {len(affected)} 页" if affected else "暂未出现在画面"
+        era_hint = era or "年代未标注"
         out.append(Finding(
             None, "block", "ERA_ANACHRONISM",
-            f"角色「{nm}」的视觉签名含后世器物 {hits}（{where}）",
-            "先秦人物不该有金质发冠/龙纹/繁复织锦 —— 模型会忠实照画。"
-            "实测 kc_1790664590：夫差被画成明清帝王，每页都错。"
-            "改成素麻/葛布/深色圆领袍 + 发束高髻缠布带这类本时代形制"
-            "（注：玉璧是春秋战国正统礼器，不在穿帮词表内）"))
+            f"角色「{nm}」（{era_hint}）的视觉签名含后世器物 {hits}（{where}）",
+            f"该角色年代为「{era_hint}」，签名里出现这个时代不该有的器物 —— "
+            "模型会忠实照画。实测 kc_1790664590：先秦的夫差被写成"
+            "「金质发冠+繁复丝绸」，每页都画成明清帝王。"
+            "改成该时代本有的形制（先秦用素麻/葛布/深色圆领袍 + 发束高髻缠布带；"
+            "唐宋用圆领袍+幞头；明清用袍服+乌纱/朝冠）。"
+            "注意：玉璧是春秋战国正统礼器，蜡烛/油灯在清代宫廷亦常见，"
+            "均不在穿帮词表内。"))
     return out
 
 

@@ -1,8 +1,8 @@
-# 5 个锁定风格 · v0.2.4 完整定义
+# 5 个锁定风格 · v0.3.26 完整定义
 
 引用自 [handraw-style 项目](https://github.com/yang0/handraw-style)（2.2k stars）。
 
-v0.2.4（2026-09-21）从早期 8 风格演变到 **5 风格**：
+v0.2.4（2026-09-21）从早期 8 风格收敛到 **5 风格**，v0.3.26 维持不变：
 - ✅ 保留：`new_yorker` / `us_mid_century` / `cn_xuanfeng` / `guochao_manhua` / `chinese_lianhuanhua_classic`
 - ❌ 砍掉：`kid_picture_book` / `kid_science_diagram` / `cn_contemporary` / `jp_kawaii_warm` / `jp_terada`
 
@@ -234,7 +234,7 @@ NO speech bubbles. NO caption boxes. NO watermarks. NO labels. NO arrows-with-wo
 
 每页 visual 按 7 段组织：SUBJECT / ACTION / CAMERA（shot+angle+lens+DoF）/ PLACEMENT / DEPTH LAYERS（foreground+midground+background）/ LIGHTING / MOOD-PALETTE
 
-完整结构见 `SKILL.md` §6。
+完整结构见 `SKILL.md`「核心原则（不可破坏）」§4「七要素结构铁律」。
 
 ---
 
@@ -250,7 +250,7 @@ print(recommend_style_rationale("张巡守睢阳"))
 # 备选：国潮古风条漫、宣风 · 国风写意
 ```
 
-完整映射（v0.2.4）：
+完整映射（v0.2.4 定版，v0.3.26 未变）：
 | 主题 | 主风格 | 备选 |
 |---|---|---|
 | **历史典故 / 国学 / 古籍 / 古典** | **chinese_lianhuanhua_classic** | guochao_manhua, cn_xuanfeng |

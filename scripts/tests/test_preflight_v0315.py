@@ -25,7 +25,11 @@ sys.path.insert(0, str(ROOT))
 from scripts.core.planner import StoryPage, Storyboard          # noqa: E402
 from scripts.core.preflight import run_preflight                 # noqa: E402
 
-REAL_JOB = ROOT / "data" / "kc_1790586703" / "storyboard.json"
+# v0.3.27：夹具从 gitignore 的 `data/` 移进版本库。
+# 原先这里指向 `data/kc_1790586703/storyboard.json` —— 那意味着本测试**只在
+# "恰好跑过那个 job 的机器"上能过**，换设备或清了 data/ 就红，属于不可复现的
+# 测试。夹具内容未做任何改动，只是搬了个家。
+REAL_JOB = Path(__file__).resolve().parent / "fixtures" / "kc_1790586703.storyboard.json"
 STYLE = "chinese_lianhuanhua_classic"
 
 _passed: list[str] = []

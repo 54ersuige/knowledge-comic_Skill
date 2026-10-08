@@ -9,6 +9,11 @@ __pycache__/
 *.pyc
 *.pyo
 
+# 工具缓存：ruff / pytest 会在目录内写一个 `*` 的 .gitignore 自我忽略，
+# 但那是工具的行为、不是仓库的策略 —— 显式写死，免得换个工具版本就漏进来。
+.ruff_cache/
+.pytest_cache/
+
 # Editor
 .vscode/
 .idea/

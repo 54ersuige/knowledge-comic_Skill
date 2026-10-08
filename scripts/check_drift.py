@@ -2,14 +2,14 @@
 
 为什么需要这个脚本
 ------------------
-`AGENTS.md` 定的规矩是：改动**只在 Skill 侧做**（`~/.minimax/skills/knowledge-comic/`），
+本 skill 的同步规矩是：改动**只在 Skill 侧做**（`~/.minimax/skills/knowledge-comic/`），
 `src/core/` 是它的**只读镜像**，用于离线阅读和 code review。规矩里也写了
-"同步完必须跑漂移校验"，但那条校验是一条**要人手动敲的 PowerShell**。
+"同步完必须跑漂移校验"，但那条校验过去只是一条**要人手动敲的 PowerShell**。
 
 于是它从来没被稳定执行过。2026-10-08 实测：`article.py` 真源 1727 行、
 镜像 1721 行 —— **镜像缺 v0.3.18 的双层蒙版修复**，一直没人发现。
-AGENTS.md 顶部那段"声明与现实不符且无校验机制，是这次漂移烂了好几天的原因"
-说的就是它自己。**纯人工约定 = 不会执行。**
+**"声明与现实不符且无校验机制，是这次漂移烂了好几天的原因"** ——
+这句话说的就是只靠人工约定本身。**纯人工约定 = 不会执行。**
 
 本脚本把那条约定变成可执行、可进 CI、退出码有意义的检查：
 逐文件比对行数 + SHA-256，列出镜像缺文件 / 多文件 / 内容不一致三类漂移。
@@ -157,7 +157,7 @@ def do_sync(dev_core: Path) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser(description="校验/同步 Skill 真源与 dev 只读镜像")
     ap.add_argument("--sync", action="store_true",
-                    help="先把真源复制到镜像，再复校（AGENTS.md 第 2 步）")
+                    help="先把真源复制到镜像，再复校（同步流程第 2 步）")
     ap.add_argument("--path", default=None, help="镜像 src/core 路径")
     args = ap.parse_args()
 

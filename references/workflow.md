@@ -1,6 +1,6 @@
-# Workflow · 详细流程 + 调试指南（v0.2.4）
+# Workflow · 详细流程 + 调试指南（v0.3.26）
 
-## Mavis 对话流专用规则（v0.2.4，2026-09-21 沉淀）
+## Mavis 对话流专用规则（2026-09-21 沉淀，v0.3.26 仍适用）
 
 ### 流程总览（每一步都要用户拍板才能进下一步）
 
@@ -26,17 +26,11 @@
 
 #### A. 每张图必附"分镜意图 vs 实际画面"对照表 ★★★
 
-**为什么**：用户在 2026-09-21 张巡守睢阳项目明确抱怨：
-> "你现在堆出来一堆画，每个画表达的是什么内容，我也不知道，怎么能判断是否合适？这个要优化，并且更新到 skill 中。"
+**为什么**：用户在 2026-09-21 张巡守睢阳项目明确抱怨：「你现在堆出来一堆画，每个画表达的是什么内容，我也不知道，怎么能判断是否合适？」
 
-**怎么做**：Mavis 在 step_gen_images 完成后，**必须**用 read tool 把 12 张图实际读出来，对照 storyboard.json 的 caption + key_visual + body 摘要，输出对照表：
+**怎么做**：`step_gen_images` 完成后，用 read tool 把全部图读出来，对照 storyboard.json 的 caption / key_visual / body 输出对照表（每页用 ✅ / ⚠ / ❌ 标记关键元素是否到位）。
 
-| 页 | 章节 | 分镜意图 | 实际画面 | 评估 |
-|---|---|---|---|---|
-| p1 烽起 | 张巡赴任真源 | 烛光 + 持卷轴 + 看地图 + 风雪夜 | ✅ 张巡持卷轴 ✅ 烛光 ✅ 桌上地图 ✅ 窗外飞雪 | ✅ 完全符合 |
-| p9 骂贼 | 嚼齿穿龈、骂贼至死 | 被绑木桩 + 嘴角带血 + 仰天长啸 | ✅ 张巡站姿仰望 ✅ 敌人执矛剪影 ⚠ 未呈现"被绑" ⚠ 未呈现"血" | ❌ 关键元素缺失 |
-
-每页用 ✅ / ⚠ / ❌ 标记关键元素是否到位。
+> **对照表模板 + 完整说明见 `references/user-review.md` §Checkpoint 2「图片审阅」。**
 
 #### B. 端到端长任务实时进度同步
 
@@ -182,10 +176,7 @@ A：登录 mp.weixin.qq.com → 设置与开发 → 基本配置 → 公众号�
 
 ### Q：风格跑偏到现代写实（连环画派跑出了油画感）？
 
-A：v0.2.4 §6 现代写实锚点防范：
-1. 把 "painted illustration" 声明放 SUBJECT 第一句
-2. 砍掉 candle / lantern / desk / porcelain / modern Chinese minimalism / volumetric light
-3. 把人物描述成 brush-painted figure on rice paper
+A：见 `references/handraw_styles.md` §5.1「chinese_lianhuanhua_classic 防跑偏铁律」（painted illustration 声明放 SUBJECT 首句 / 避开 candle·lantern·desk 等现代写实物件词 / 人物写成 brush-painted figure on rice paper）。
 
 ### Q：草稿已发但想换图重发？
 

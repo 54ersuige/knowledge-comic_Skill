@@ -1,19 +1,22 @@
-"""Prompts - 锁定 4 个高质感风格 + 角色一致性 + 零文字硬约束。
+"""Prompts - 锁定 5 个高质感风格 + 角色一致性 + 零文字硬约束。
 
 v0.2 重构（2026-09-20）：
   - 砍掉 8 风格中的 4 个（kid_picture_book / kid_science_diagram /
     jp_kawaii_warm / jp_terada），锁定 3 个最有特点的成人向风格：
-      1. new_yorker      知识/商业/严肃（黑白色块 Risograph 杂志感）
-      2. us_mid_century  商业评论/设计/品牌（mustard+teal+砖红 复古杂志）
-      3. cn_xuanfeng     历史典故/国学（飞白+朱砂+宣纸，中国水墨写意）
+      1. new_yorker      纽约客式 · 报刊讽刺（黑白 Risograph 杂志风）
+      2. us_mid_century  美式中世纪 · 复古杂志（mustard+teal+砖红）
+      3. cn_xuanfeng     宣风 · 国风写意（飞白+朱砂+宣纸，中国水墨写意）
   - 加 ZERO_TEXT_BOOST：所有 prompt 强制 "NO TEXT/NUMBERS/DIGITS/LETTERS/SIGNS"
   - 加 CHARACTER_HOOKS：每张图描述强制同款角色，保证跨页一致
   - RECOMMEND_MATRIX 简化到合理映射
 
 v0.2.2（2026-09-21）新增第 4 风格：
-  4. guochao_manhua  历史典故/中国故事（《镖人》《一人之下》类现代国漫分镜语言 +
-                          古装 + 鲜艳色块，赛璐璐上色；用户实际偏爱国潮赛璐璐/古风条漫
-                          多于纯传统水墨写意）。历史/典故类 RECOMMEND 优先级第一。
+  4. guochao_manhua  国潮古风条漫（《镖人》《一人之下》类现代国漫分镜语言 +
+                          古装 + 鲜艳色块，赛璐璐上色）。历史/典故类 RECOMMEND 优先级第一。
+
+最新（第 5 风格）：
+  5. chinese_lianhuanhua_classic  中国古典连环画（戴敦邦核心 + 刘继卣史诗 +
+                          王叔晖审美，连环画派绘法，含完整角色锚点与性别锚点）。
 """
 from __future__ import annotations
 

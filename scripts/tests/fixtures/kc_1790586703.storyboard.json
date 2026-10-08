@@ -1,0 +1,187 @@
+{
+  "topic": "苏武牧羊",
+  "style_id": "chinese_lianhuanhua_classic",
+  "title": "苏武牧羊北海边",
+  "subtitle": "《汉书·苏武传》本事",
+  "summary": "汉武帝的最后一名使节，在冰天雪地中被扣留十九年。历史书上是他宁死不屈的忠贞，档案里却是帝国信用崩塌后的长期外交僵局。",
+  "preface": "北海十九年",
+  "epigraph": "武留匈奴凡十九岁，始以强壮出，及还，须发尽白。",
+  "postscript": "出使时随行百余人，同返者九人。",
+  "recommended_template": "c",
+  "characters": [
+    {
+      "name": "苏武",
+      "role": "主角",
+      "visual_signature": "西汉汉使，45-65岁，面容清瘦颧骨微高，眉骨突出，蓄短须，戴黑色平巾帻（汉式圆顶小帽），身着深灰/赭石色长袍（粗麻质感，无繁复纹样），手持旄节（竹竿插旄牛尾，穗子磨损）。身形因长期恶劣环境而佝偻或紧绷，眼神坚毅或疲惫。"
+    },
+    {
+      "name": "李陵",
+      "role": "配角/反派（道德困境者）",
+      "visual_signature": "降将，40-50岁，面容憔悴，眼神阴郁且充满矛盾，留有胡须，身着匈奴式皮毛大氅（灰白色毛皮，非纯白），腰悬短刀，神态颓废又带着旧日名将的傲气。"
+    }
+  ],
+  "pages": [
+    {
+      "page": 1,
+      "visual": "Character bible: Su Wu, 45yo Chinese envoy, square face, short beard, wearing dark grey round-collar robe and black flat cap (zhizhuo), holding a tall bamboo staff (miao) with ox-tail plumes. [GENDER:male] Expression: grim_resolve. Wide establishing shot, low angle looking up at the staff against the sky, 24mm lens, deep focus. Foreground: the rough texture of the staff and the envoy's boots in the snow. Midground: Su Wu and a second envoy (Zhang Zhong) standing on a snowy ridge, holding the staff high. Background: vast grey sky, distant line of snow-capped mountains, wind blowing snow horizontally. Lighting: hard overhead sunlight, blinding white snow contrast with dark robes. Mood: solemn, desaturated blue-grey palette with stark white snow. // 苏武 出塞 远景 旗帜 灰蓝 坚定 雪原",
+      "caption": "天汉元年，苏武持节出使匈奴",
+      "dialogue": "武帝嘉其义，乃遣武以中郎将使持节送匈奴使留在汉者。",
+      "narration": "",
+      "body": "随行的有一百多人，带着国书和厚礼，穿越塞外的草原沙砾。在当时，这是再寻常不过的边交往来——馈赠礼物、申明约束、辞别返程。苏武没想到，这一去就是十九年。他把节杖握在手里，出了长安城北的门。",
+      "key_visual": "旄节穗子在风中猎猎作响，但画面色调是冰冷的灰蓝",
+      "highlight": "出使",
+      "keywords": [
+        "苏武",
+        "匈奴",
+        "天汉元年"
+      ],
+      "punchline": "他走的时候，节上的毛还是新的。"
+    },
+    {
+      "page": 2,
+      "visual": "Character bible: Su Wu... [GENDER:male] Expression: awed_stillness (shock/defiance). Three-quarter shot, eye level, 50mm lens, shallow_dof. Foreground: heavy iron chains or rough wooden bars casting long shadows. Midground: Su Wu sitting in a dark, cramped underground cell or yurt, the bright yellow ox-tail of his staff visible in the gloom. Background: a flickering tallow candle in the back, a shadow of a Xiongnu guard watching. Lighting: warm dim candlelight mixing with cold blue moonlight from a small window/slit. Mood: claustrophobic, warm and cool contrast, tension. // 苏武 囚禁 地窖 烛光 链条 警惕 幽暗",
+      "caption": "昆邪王谋反事败，苏武一行被留",
+      "dialogue": "单于益骄，非汉所望也。",
+      "narration": "",
+      "body": "单于十分骄横，并不把汉朝放在眼里。正赶上匈奴内部昆邪王、缑王谋反，事情败露后牵连到了苏武一行。匈奴借机把他们扣下，逼迫投降汉朝。消息传回长安，朝野震动——百年汉使，未有受困于北狄者如此之久。",
+      "key_visual": "幽暗地窖中，苏武靠着一根旗帜，与昏暗环境对比",
+      "highlight": "扣留",
+      "keywords": [
+        "单于",
+        "昆邪王",
+        "缑王"
+      ],
+      "punchline": "一个大国的人，成了邻邦的筹码。"
+    },
+    {
+      "page": 3,
+      "visual": "Character bible: Su Wu... [GENDER:male] Expression: fierce_command (screaming/refusing). Wide shot, high angle (bird's eye), 35mm lens, deep focus. Foreground: a patch of snow stained with fresh blood. Midground: Su Wu lying on the snowy ground, hand on his chest/stomach (wounded), looking up defiantly. The bamboo staff stands upright next to him, plumes fluttering. Background: silhouettes of Xiongnu soldiers surrounding them, holding spears. Lighting: harsh, bleached out daylight, high contrast. Mood: tragic heroism, stark white and dark red (blood) palette. // 苏武 倒地 不屈 血迹 旄节 俯视 士兵 惨烈",
+      "caption": "幽于大窖，绝不饮食，卧啮雪并咽毡毛",
+      "dialogue": "单于愈益欲降之，乃幽武置大窖中，绝不饮食。\n天雨雪，武卧啮雪，与毡毛并咽之，数日不死。匈奴以为神。",
+      "narration": "",
+      "body": "单于越想让他投降，就把他关进大地窖里，断绝饮食。天降大雪，苏武躺着吃雪，连毡毛一起咽下，这样过了几天居然没死。匈奴人以为是神人所作。刀兵加不到他身上，苏武已经把生死置之度外。对方用威武相胁，他以性命相酬——这不是血气之勇。",
+      "key_visual": "苏武倒地，旄节插在旁边雪中，血痕隐约可见",
+      "highlight": "啮雪",
+      "keywords": [
+        "单于",
+        "大窖",
+        "毡毛"
+      ],
+      "punchline": "死可以，降不可以。"
+    },
+    {
+      "page": 4,
+      "visual": "Character bible: Su Wu... [GENDER:male] Expression: grim_resolve. Medium shot, eye level, 85mm lens, deep focus. Foreground: Su Wu's chisel-like fingers digging into frozen ground, clumps of dead grass. Midground: Su Wu hunched over, robe tattered, holding the staff which is now worn and bare of some plumes. Background: the frozen surface of Lake Baikal (Bei Hai), flat and white, extending to the horizon. Lighting: diffused overcast light, flat grey tones. Mood: desolate, survival, stark minimalism. // 苏武 挖掘 枯草 荒原 北海 枯瘦 绝望 坚毅",
+      "caption": "徙北海无人处，掘野鼠草实而食",
+      "dialogue": "乃徙武北海上无人处，使牧羝。\n武既至海上，廪食不至，掘野鼠去草实而食之。",
+      "narration": "",
+      "body": "匈奴发现威逼利诱都没用，就把他押到北海边无人烟的地方，让他牧羊。北海就是今天的贝加尔湖一带，荒凉寒冷，匈奴不再送粮。苏武只能挖野鼠藏在洞里的草实充饥，喝雪水，嚼毡毛。这样的日子，不是「忍耐」两个字能说尽的——是用最少的食物，熬最长的时日，在荒寒之地硬撑。",
+      "key_visual": "枯瘦的苏武在雪地中挖掘，背景是冰封的湖面",
+      "highlight": "北海",
+      "keywords": [
+        "北海",
+        "野鼠",
+        "草实"
+      ],
+      "punchline": "最难熬的不是苦，是没有尽头。"
+    },
+    {
+      "page": 5,
+      "visual": "Character bible: Su Wu... [GENDER:male] Expression: neutral (contemplative). Extreme wide shot, high angle, 24mm lens, deep focus. Foreground: the coarse texture of the snow ground. Midground: Su Wu walking with a long stick, leading a large flock of sheep (hundreds) away from the viewer. Background: endless tundra, low shrubs, distant mountains. Lighting: golden hour sunset, long shadows stretching across the white snow. Mood: isolating, rhythmic time passage, warm orange against cool blue. // 苏武 牧羊 羊群 远景 孤独 时间 金色夕阳 荒原",
+      "caption": "使牧羝，羝乳乃得归",
+      "dialogue": "使牧羝，羝乳乃得归。",
+      "narration": "",
+      "body": "单于对他说：让你牧一群公羊，等公羊生了小羊，你就可以回去。公羊怎么可能生乳？这句话不是宽待，而是要让苏武在看不到尽头的等待里自己毁掉自己。刑罰逼不出投降，就用漫长的日子去消磨他。于是苏武在北海牧羊，手扶汉节，睡觉起床都握着它。",
+      "key_visual": "巨大的羊群背影，苏武微小的身影在羊群前方",
+      "highlight": "牧羝",
+      "keywords": [
+        "公羊",
+        "汉节",
+        "北海"
+      ],
+      "punchline": "公羊不会生乳，归期从一开始就没有。"
+    },
+    {
+      "page": 6,
+      "visual": "Character bible: Su Wu... [GENDER:male] Expression: tender_grief (holding the staff). Close-up to medium shot, slightly low angle, 135mm lens, shallow_dof. Foreground: fallen ox-tail plumes scattered on the snow, brittle and brown. Midground: Su Wu's face, weathered, windburned, eyes closed, holding the bare bamboo staff against his chest like a child. Background: blurred white snow. Lighting: soft, diffuse light, highlighting the texture of the bare bamboo. Mood: melancholic, fragile dignity, sepia and white. // 苏武 孤节 旄毛尽落 竹竿 特写 沧桑 怀抱 悲凉",
+      "caption": "杖汉节牧羊，卧起操持，节旄尽落",
+      "dialogue": "杖汉节牧羊，卧起操持，节旄尽落。",
+      "narration": "",
+      "body": "《汉书》在这里落下一个极重的细节：节旄尽落。汉节是竹子做的旌杆，上面缀着牦牛尾毛。十九年的风雪，把尾毛一根根磨尽，只剩一竿光竹。苏武握着它，就像握着性命。竹竿被手汗浸得发亮，节上系过的绳结换了又换。",
+      "key_visual": "苏武怀抱光秃秃的竹竿，旄毛散落一地",
+      "highlight": "节落",
+      "keywords": [
+        "汉节",
+        "节旄",
+        "旄"
+      ],
+      "punchline": "旄可以落，节不能失。"
+    },
+    {
+      "page": 7,
+      "visual": "Character bible: Su Wu... [GENDER:male] Expression: sobbing_silence. Medium shot, high angle looking down, 50mm lens, deep focus. Foreground: snow-covered knees and the bare staff leaning against a stone. Midground: Su Wu prostrating himself on the ground, head in the snow, shoulders shaking. Background: the vast empty expanse of the frozen tundra, no human traces. Lighting: cold blue twilight, isolation. Mood: absolute despair, silence, monochromatic blue-white. // 苏武 跪拜 雪 绝望 昭帝 死亡 孤独 寒冷 蓝色",
+      "caption": "汉使诡告：汉昭帝已崩，南乡号哭",
+      "dialogue": "武闻之，南乡号哭，欧血，旦夕临。",
+      "narration": "",
+      "body": "公元 81 年春天，汉使来到匈奴，带来一个精心编造的噩耗：汉昭帝已经驾崩了。李陵得到消息，转告苏武：有个逃亡的人被俘后说，天子已经崩了。苏武听完，面朝南方放声痛哭，吐血数升，日日如此。这是十九年里最锋利的一刀——匈奴不必真的让他投降，只要切断他和汉朝的消息就够了。",
+      "key_visual": "苏武在雪地里跪拜，头触地，背景是无尽的白",
+      "highlight": "诈崩",
+      "keywords": [
+        "汉昭帝",
+        "李陵",
+        "号哭"
+      ],
+      "punchline": "他守了十九年的，是一个已经不在的家国。"
+    },
+    {
+      "page": 8,
+      "visual": "Character bible: Su Wu... [GENDER:male] Expression: grim_resolve. Medium two-shot, eye level, 85mm lens, shallow_dof. Foreground: a cup of hot liquid (tea/wine) steaming between them. Midground: Li Ling (40yo, ragged Xiongnu fur coat, disheveled hair) covering his face with hands, crying. Su Wu sitting opposite, holding his bare staff, looking straight ahead with cold determination. Background: a dimly lit yurt interior, fire burning low. Lighting: warm firelight casting deep shadows on their faces. Mood: intimate tragedy, conflict of values, warm orange against dark brown. // 李陵 哭泣 苏武 冷眼 帐内 火光 劝降 对比 矛盾",
+      "caption": "李陵置酒说降，叹曰：嗟乎，义士",
+      "dialogue": "陵曰：人生如朝露，何久自苦如此？\n子为父死，亡所恨。\n陵见其至诚，喟然叹曰：嗟乎，义士！",
+      "narration": "",
+      "body": "李陵投降匈奴后，私下到北海去看苏武，摆酒设乐劝他降。李陵说：你妻子年轻，听说已经改嫁了；妹妹有两个，活着还是死了都不知道。人的一生像清晨的露水，何必这样长期地折磨自己？苏武回答：我们父子都受陛下恩遇，我侍奉陛下就像儿子侍奉父亲，儿子为父亲死，没有什么可遗憾的。李陵见他恳切，叹息道：真是义士啊！两人哭着分别。",
+      "key_visual": "两人对坐，李陵掩面哭泣，苏武背对或侧对，冷静",
+      "highlight": "劝降",
+      "keywords": [
+        "李陵",
+        "义士",
+        "女弟"
+      ],
+      "punchline": "他没说话，只是把李陵的眼泪留在了那里。"
+    },
+    {
+      "page": 9,
+      "visual": "[GENDER:male] Rider: Han man age 35, full beard, black official cap (帻), short riding tunic, boots, on horseback in midground, urging the horse forward.\n[GENDER:male] Standing figure: Han man age 50, greying beard, plain dark scholar robe, scholar topknot, small on the distant ridge looking east.\nWide shot, eye level, 35mm lens, deep focus. Horse hooves kicking snow in foreground. Long winding snow road leading to a distant walled city. First light of dawn, pale pink and blue sky.\nSTRICT NO TEXT — plain fabric, no characters, no calligraphy, no symbols.",
+      "caption": "常惠教使者言雁足系帛书，单于惊谢",
+      "dialogue": "天子射上林中，得雁足有系帛书，言武等在某泽中。\n单于视左右而惊，谢汉使曰：武等实在。",
+      "narration": "",
+      "body": "常惠找到看守苏武的人，请他带话给汉使，并教汉使对单于说：天子在上林苑射猎，射下一只雁，雁足上系着帛书，说苏武他们藏在某片湖泽里。单于左右看了看，大为惊骇，赶紧向汉使赔罪：苏武等人确实还活着。于是李陵设酒为苏武贺，常惠等人随他一同回国。匈奴召集群臣清点：跟随苏武回来的，一共九个人。",
+      "key_visual": "信使骑马疾驰，背景是长城或官道",
+      "highlight": "请归",
+      "keywords": [
+        "常惠",
+        "雁足",
+        "苏武",
+        "长安",
+        "归途"
+      ],
+      "punchline": "一只雁，九个人，一根只剩竹竿的节。"
+    },
+    {
+      "page": 10,
+      "visual": "Character bible: Su Wu... [GENDER:male] Expression: neutral (acceptance). Medium shot, low angle looking up at the grave mounds, 50mm lens, deep focus. Foreground: bare earth and snow patches on the grave mounds. Midground: Su Wu standing alone, holding the bare bamboo staff against his chest, looking at the graves. Background: a solitary willow tree, grey sky, wind blowing dust. Lighting: overcast, flat light, no shadows. Mood: quiet resignation, the emptiness of return, grey and white. // 苏武 坟墓 白骨 故土 孤独 节杖 灰天 释然",
+      "caption": "奉一太牢谒武帝园庙，秩中二千石",
+      "dialogue": "武以始元六年春至京师，诏武奉一太牢谒武帝园庙，拜为典属国。\n武留匈奴凡十九岁，始以强壮出，及还，须发尽白。",
+      "narration": "",
+      "body": "公元 81 年春，苏武回到京城。汉昭帝下诏，让他用最高的礼节祭拜汉武帝陵庙，授职典属国，秩中二千石，赏钱二百万。他在匈奴整整十九年，出使时身强力壮，回来时须发全白。当年同行一百多人，回来的只有九个。他握着那根只剩竹竿的汉节立在阶前——妻子早已改嫁，兄弟生死不明，宅第也早已成了别人的。",
+      "key_visual": "苏武站在坟前，手持光秃节杖，墓碑模糊",
+      "highlight": "归汉",
+      "keywords": [
+        "典属国",
+        "须发尽白",
+        "十九岁"
+      ],
+      "punchline": "他带回来的不是荣耀，是一根光竹。"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-"""guide.py · Mavis 触发引导脚本（v0.2.4）。
+"""guide.py · Mavis 触发引导脚本（v0.3.27）。
 
 用法：
     python guide.py                          # 列出所有 step + 推荐矩阵
@@ -8,14 +8,13 @@
 
 返回 JSON（脚本调用时）：
     {
+      "topic": "王阳明心学",
       "style_id": "chinese_lianhuanhua_classic",
       "template_id": "c",
-      "alternates": [
-        ("guochao_manhua", "c"),
-        ("cn_xuanfeng", "c")
-      ],
-      "rationale_zh": "...",
-      "rationale_en": "..."
+      "style_alternates": ["chinese_lianhuanhua_classic", "guochao_manhua", ...],  # 首项即 style_id
+      "template_alternates": ["c", "e", "a"],                                     # 首项即 template_id
+      "pairs": [("chinese_lianhuanhua_classic", "c"), ...],
+      "rationale_zh": "..."
     }
 """
 from __future__ import annotations
@@ -89,15 +88,21 @@ def show_overview() -> str:
         "",
         "## Step API 入口（Python 直接 import）",
         "  from scripts.run import (",
-        "      step_plan,              # Step 1",
-        "      step_gen_images,        # Step 2",
-        "      step_render_article,    # Step 3",
-        "      step_publish_draft,     # Step 4",
-        "      # v0.2.4 新增辅助",
-        "      step_rewrite_visual,    # 重写某页 visual + 立即重跑",
-        "      step_show_intent_vs_actual,  # 输出对照表",
-        "      step_dry_publish,       # dry-run 渲染 publish html",
-        "      step_preflight,         # 发布前自检（6 项）",
+        "      step_plan,                  # Step 1：规划分镜",
+        "      step_preflight_images,      # 生图前体检（21 个 code）",
+        "      step_visual_qa,             # 视觉审核（不跑图）",
+        "      step_gen_images,            # Step 2：生成页面配图",
+        "      step_render_article,        # Step 3：storyboard + 图片 → 公众号 HTML",
+        "      step_publish_draft,         # Step 4：发布公众号草稿",
+        "      step_review_storyboard,     # Checkpoint 1：分镜审阅",
+        "      step_dump_storyboard,       # 读回 storyboard.json 原始 dict",
+        "      step_set_page_field,        # 原地改第 N 页某字段",
+        "      step_story_script,          # 图文对齐诊断（辅助）",
+        "      step_layout_preview,        # Checkpoint 1：排版 + 分镜审阅",
+        "      step_rewrite_visual,        # 重写某页 visual + 立即重跑",
+        "      step_show_intent_vs_actual, # 意图 vs 实际 对照表",
+        "      step_dry_publish,           # dry-run 渲染 publish html",
+        "      step_preflight,             # 发布前自检（不发布）",
         "  )",
         "",
         "## 默认页数 (v0.2.4 智能分级)",
@@ -106,10 +111,6 @@ def show_overview() -> str:
         "  recommend_pages(5)  -> 10  页  (中典故/中等事件)",
         "  recommend_pages(8)  -> 12  页  (长典故/多线叙事)",
         "  step_plan(..., num_pages=15)  # 显式覆盖 (范围 6-15)",
-        "",
-        "## 诊断工具",
-        "  python diagnose_prompt.py <job_id>  # 检查 prompt 是否超 9800 字符",
-        "  python diagnose_terms.py <job_id>   # 检查 visual 是否含风格锚点",
         "",
         "## Mavis 对话工作流（端到端）",
         "  /knowledge-comic → 问主题 → 推荐风格 + 模板 → ask_user 拍板 → ",

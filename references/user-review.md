@@ -1,4 +1,4 @@
-# 用户介入 checkpoint 设计（v0.2.4 Mavis 对话流版）
+# 用户介入 checkpoint 设计（v0.3.26 Mavis 对话流版）
 
 > 核心思想：**用户的认知 / 审美 / 独特性是作品的灵魂，LLM 是工具而非作者。**
 > 自动化减少体力劳动，但创作决策不可外包。
@@ -20,7 +20,7 @@ LLM 生成的内容常常"还行但不到位"：
 
 ## v0.2 重构：Mavis 对话流取代 subprocess checkpoint
 
-v0.2（2026-09-20）**完全去掉** `subprocess.run([sys.executable, review.py])` 的 stdin checkpoint 模式（已确认 Mavis 对话接不到 subprocess stdin，会静默 EOFError）。改为 Mavis 在主对话里：
+v0.2（2026-09-20）**完全去掉** subprocess 的 stdin checkpoint 模式（已确认 Mavis 对话接不到 subprocess stdin，会静默 EOFError）。改为 Mavis 在主对话里：
 - 用 `read tool` 读产物（JSON / HTML / PNG）
 - 用 `ask_user` 让用户拍板
 - 用 `deliver-assets` 展示图
@@ -54,7 +54,7 @@ paths = step_layout_preview(job_id, compare_templates=["c", "e"])
 **用户操作（ask_user 选项）**：
 - ✅ **图文相符，去生图** — 跑 `step_gen_images(job_id)`
 - 🎨 **换模板重看** — `step_layout_preview(job_id, template_id="e")`
-- 🔧 **改某页文案/分镜** — `review.set_page_field(job_id, page, field, value)`，改完重看预览
+- 🔧 **改某页文案/分镜** — `step_set_page_field(job_id, page, field, value)`，**改完必须重调 `step_layout_preview(job_id)` 重发预览**再让用户确认
 - 🔄 **重跑整组分镜** — 重跑 `step_plan`
 - ❌ **拒绝** — 删 work_dir
 
@@ -192,8 +192,9 @@ draft = step_publish_draft(job_id)   # ← 这一步会真的写公众号草稿�
 
 ## 相关文件
 
-- `scripts/run.py` — 主入口，4 个 step_* API
-- `scripts/review.py` — 分镜 JSON 读写工具（无 stdin，Mavis 不直接用）
-- `scripts/image_review.py` — 图片 rerender 标记工具
+- `scripts/run.py` — 主入口，全部 `step_*` API（详见 `SKILL.md` 的「API 索引」）
+- `scripts/review.py` — 旧分镜 JSON 读写工具，**已删除**；字段编辑能力已上收为 `run.py` 的 `step_set_page_field`（Mavis 直接用它）
+- `scripts/image_review.py` — 旧图片 rerender 标记工具，**已删除**（它写的 `rerender.json` 全项目无人读取）。重画请用 `step_gen_images(job_id, regenerate_pages=[N, ...])`
 - `references/user-review.md` — 本文档
 - `references/workflow.md` — 端到端流程图 + 调试指南
+- `references/quality-gates.md` — 两道关卡的完整判据与阈值真源

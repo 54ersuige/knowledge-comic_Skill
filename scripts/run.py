@@ -609,6 +609,78 @@ def step_review_storyboard(
     return md, html_path
 
 
+# v0.3.27：从 scripts/review.py 上收。只允许改这些字段 —— 让 planner 决定
+# 的字段（visual 的七要素结构、keywords 的朱砂高亮）不经这一层改。
+_EDITABLE_PAGE_FIELDS = ("highlight", "caption", "visual", "body", "dialogue", "narration")
+
+
+def step_dump_storyboard(
+    job_id: str,
+    data_dir: Path | None = None,
+) -> dict:
+    """读回 storyboard.json 的原始 dict（Checkpoint 1 改字段前后的对照用）。
+
+    Args:
+        job_id: job id
+        data_dir: 数据目录（默认取 config.data_dir）
+    Returns:
+        storyboard dict —— title / subtitle / style_id / recommended_template / pages
+    """
+    cfg = get_config()
+    work_root = data_dir or cfg.data_dir
+    sb_path = work_root / job_id / "storyboard.json"
+    if not sb_path.exists():
+        raise FileNotFoundError(f"storyboard.json not found: {sb_path}")
+    return json.loads(sb_path.read_text(encoding="utf-8"))
+
+
+def step_set_page_field(
+    job_id: str,
+    page: int,
+    field: str,
+    value: str,
+    data_dir: Path | None = None,
+) -> bool:
+    """原地改 storyboard.json 第 N 页的某个字段（Checkpoint 1 唯一的编辑入口）。
+
+    **改完必须重新调 `step_layout_preview(job_id)` 把新预览发给用户** ——
+    只改文件不重发预览，等于用户没参与这次修改（见 SKILL.md「用户主导」）。
+
+    v0.3.27：从 `scripts/review.py` 上收进主入口。原写法是 step 函数的
+    docstring 让 Mavis 去 import 一个旁路模块，是"单入口"原则的漏网之鱼 ——
+    同源问题在这个项目已出现过 3 次（v0.3.21 prompt 拼装双路径 /
+    v0.3.24 阈值漂移 / 本次 step 与旁路模块并存）。
+
+    Args:
+        job_id: job id
+        page: 页码（1-based，对应 storyboard.json 里的 page 字段）
+        field: 只接受 `_EDITABLE_PAGE_FIELDS` 之一
+        value: 新值（整字段替换，不做局部替换）
+        data_dir: 数据目录（默认取 config.data_dir）
+    Returns:
+        True。字段非法 / 页不存在 / 文件缺失时抛错，不返回 False。
+    """
+    if field not in _EDITABLE_PAGE_FIELDS:
+        raise ValueError(f"Invalid field: {field}, must be one of {_EDITABLE_PAGE_FIELDS}")
+
+    cfg = get_config()
+    work_root = data_dir or cfg.data_dir
+    sb_path = work_root / job_id / "storyboard.json"
+    if not sb_path.exists():
+        raise FileNotFoundError(f"storyboard.json not found: {sb_path}")
+
+    raw = json.loads(sb_path.read_text(encoding="utf-8"))
+    target = next((p for p in raw["pages"] if p.get("page") == page), None)
+    if target is None:
+        raise ValueError(f"Page {page} not found")
+
+    old = target.get(field, "") or ""
+    target[field] = value
+    sb_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[set] p{page}.{field}: {str(old)[:60]!r} -> {value[:60]!r}")
+    return True
+
+
 def step_story_script(
     job_id: str,
     data_dir: Path | None = None,
