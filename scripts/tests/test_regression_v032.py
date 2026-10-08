@@ -326,7 +326,13 @@ _sb3 = Storyboard(topic="T", style_id="chinese_lianhuanhua_classic", pages=[
 ])
 _h3 = render_layout_preview(_sb3, template="c")
 ck("文言叠在图上（蒙版容器）", "linear-gradient(180deg" in _h3)
-ck("蒙版在图下方（bottom:0）", "bottom:0" in _h3)
+# v0.3.18：蒙版实现从 position:absolute 叠加改为**负 margin 压图**。
+#   微信编辑器会过滤 position:absolute —— absolute 一失效，蒙版就从"压在图底"
+#   掉成"图下面的独立色块"（用户实测）。负 margin 是微信支持的重叠方式，
+#   `-62px` 正好抵消字幕块高度，使下沿与图片下沿重合。
+ck("蒙版用负 margin 压图（非 absolute）",
+   "margin:-62px 0 0 0" in _h3 and "bottom:0" not in _h3,
+   "(检测到 position:absolute/bottom:0 就会在公众号掉出图外)")
 ck("定格瞬间用 punchline", "旄可以落，节不能失。" in _h3)
 ck("定格瞬间不显示文言", _h3.count("杖汉节牧羊") == 1)
 ck("punchline 字段存在", "punchline" in _PS)

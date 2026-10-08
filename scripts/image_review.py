@@ -98,7 +98,7 @@ def clear_rerender(job_id: str, data_dir: Path | None = None) -> None:
     p = work_root / job_id / RERENDER_FILE
     if p.exists():
         p.unlink()
-    print(f"[rerender] cleared")
+    print("[rerender] cleared")
 
 
 def render_summary_for_user(job_id: str, data_dir: Path | None = None) -> str:

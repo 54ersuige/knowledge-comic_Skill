@@ -106,7 +106,7 @@ def main() -> int:
     print(f"  draft_media_id: {draft_id}")
     print(f"  title:          {sb.title}")
     print(f"  uploaded:       {len(uploaded)} images")
-    print(f"  go to:          https://mp.weixin.qq.com → 草稿箱")
+    print("  go to:          https://mp.weixin.qq.com → 草稿箱")
     return 0
 
 

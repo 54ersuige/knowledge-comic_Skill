@@ -27,12 +27,28 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+# v0.3.24：内容阈值统一走 thresholds.py（唯一真源）。
+# 本模块与 review_page / visual_qa / story_script 共用同一份数字，
+# 避免"改一处漏一处"（已发生 4 次：keywords 解析层 / CONCEPT 黑名单 /
+# prompt 拼装双路径 / 本次 body+keywords 阈值漂移）。
+from scripts.core.thresholds import (
+    BODY_HARD_HI,
+    BODY_TARGET_HI,
+    BODY_TARGET_LO,
+    BODY_WARN_LO,
+    KEYWORDS_IDEAL as KW_IDEAL,
+    KEYWORDS_MAX as KW_MAX,
+    KEYWORDS_MIN as KW_MIN,
+    PUNCH_MAX,
+    QUOTE_MAX,
+)
+
 # v0.3.18：时代穿帮词表（从 prompts.py 拿，同一份避免两处漂移）
 try:
     from scripts.core.prompts import ANACHRONIC_MARKERS
 except Exception:  # pragma: no cover - 独立运行时的兜底
     ANACHRONIC_MARKERS = [
-        "金质发冠", "玉璧", "龙袍", "龙纹", "补子", "乌纱", "官帽",
+        "金质发冠", "龙袍", "龙纹", "补子", "乌纱", "官帽",
         "朝服", "蟒袍", "雕龙", "织金", "点绣", "补服", "顶戴", "翎羽",
         "朝珠", "紫砂", "扶手椅", "沙发", "玻璃窗", "油灯", "蜡烛",
         "机械钟", "折扇", "繁复", "华丽",
@@ -138,14 +154,14 @@ class PreflightResult:
             return "✅ 生图前体检全部通过"
         lines = []
         if self.blocks:
-            lines.append(f"🔴 阻塞项 {len(self.blocks)} 个 —— 必须修完才能跑图")
+            lines.append(f"[阻塞] {len(self.blocks)} 个 —— 必须修完才能跑图")
             for f in self.blocks:
                 where = f"p{f.page:02d}" if f.page else "全文"
                 lines.append(f"   [{f.code}] {where}：{f.msg}")
                 if f.hint:
                     lines.append(f"        → {f.hint}")
         if self.warns:
-            lines.append(f"🟡 建议项 {len(self.warns)} 个")
+            lines.append(f"[建议] {len(self.warns)} 个")
             for f in self.warns:
                 where = f"p{f.page:02d}" if f.page else "全文"
                 lines.append(f"   [{f.code}] {where}：{f.msg}")
@@ -160,17 +176,23 @@ def _f_kw(p: dict) -> list[Finding]:
     if not kws:
         out.append(Finding(p["page"], "block", "KW_EMPTY",
                            "keywords 为空 —— 朱砂红高亮整条链路会失效",
-                           "planner prompt 铁律 5 要求 3-5 个；不满足就会渲染不出高亮"))
-    elif len(kws) > 6:
+                           f"planner prompt 铁律 5 要求 {KW_MIN}-{KW_IDEAL} 个；不满足就会渲染不出高亮"))
+    elif len(kws) > KW_MAX:
         out.append(Finding(p["page"], "warn", "KW_TOO_MANY",
                            f"keywords {len(kws)} 个偏多，正文里会碎成一片",
-                           "v0.3.12 实测：3 个最干净，只选专有名词"))
+                           f"上限 {KW_MAX} 个；v0.3.12 实测：3 个最干净，只选专有名词"))
+    elif len(kws) < KW_MIN:
+        # v0.3.24 补：review_page 一直查这条、preflight 一直漏，
+        # 结果「1 个关键词」的页面能过阻塞关卡。属于阈值漂移的受害面。
+        out.append(Finding(p["page"], "warn", "KW_TOO_FEW",
+                           f"keywords 仅 {len(kws)} 个，高亮撑不起阅读引导",
+                           f"补到 {KW_IDEAL} 个左右，优先专有名词（人名/地名/朝代/官职）"))
     return out
 
 
-def _f_body_len(p: dict, target_lo=100, target_hi=150,
-                hard_hi=170, warn_lo=90) -> list[Finding]:
-    """正文长度。
+def _f_body_len(p: dict, target_lo: int = BODY_TARGET_LO, target_hi: int = BODY_TARGET_HI,
+                hard_hi: int = BODY_HARD_HI, warn_lo: int = BODY_WARN_LO) -> list[Finding]:
+    """正文长度。阈值全部来自 thresholds.py（唯一真源）。
 
     v0.3.15 修正：初版把 100-150 当**硬边界**，结果 p01 93 字 / p02 95 字 /
     p08 154 字全被判不合格。用户的 100-150 是**目标带**（"文字不能过多"），
@@ -180,6 +202,9 @@ def _f_body_len(p: dict, target_lo=100, target_hi=150,
       - 低于 90 字 = 建议（内容偏薄）
       - 90-170 字 = 放行
     原则：关卡拦"方向错"，不拦"没到理想值"。
+
+    v0.3.24：原先这 4 个数字是本函数的默认参数字面量，review_page 那边另有一份
+    自己的（且更严），已漂移 —— 见 thresholds.py 模块 docstring 的对照表。
     """
     b = (p.get("body") or "").strip()
     n = len(b)
@@ -302,11 +327,19 @@ _ACTOR_LINE_RE = re.compile(
     r"^\[GENDER:\w+\]|^[A-Z][A-Za-z]*(?:\s+[a-z]+){0,2}\s*:")
 
 # 七要素标签（v0.2.3 画面表达系统）—— 它们是**画面要素**不是角色
+#
+# v0.3.18 修正：`concept` 必须在内。CONCEPT: 段是本轮新增的画面意图段，
+# 语法上同样是"大写词 + 冒号"，v0.3.17 建的这份黑名单没收录它，
+# 于是 `_ACTOR_LINE_RE` 把 CONCEPT: 当成角色段 → 只要同页再有第二个
+# 大写冒号行（HEADWEAR:/NEGATIVE: 等），GENDER_PARTIAL 必然误报阻塞，
+# 整页跑不了图。黑名单漏一项 = 关卡永远报警，用户会开始无视它。
 _SEVEN_ELEMENT_LABELS = {
     "subject", "action", "camera", "placement", "depth layers", "depth",
     "lighting", "mood", "expression", "key visual", "foreground",
     "midground", "background", "composition", "color palette", "palette",
     "medium", "shot", "lens", "note", "style", "framing", "angle",
+    # v0.3.18 新增
+    "concept", "headwear", "negative", "avoid", "palette note", "wardrobe",
 }
 
 
@@ -650,6 +683,10 @@ def _f_era_anachronism(storyboard, p: dict) -> list[Finding]:
     佩戴玉璧和繁复的金质发冠」—— 春秋吴王没有这些。模型忠实照画，
     结果每一页画到夫差都成了明清帝王（肥胖、金冠、锦袍）。
 
+    ⚠️ 归因澄清（v0.3.23）：真正穿帮的是**金质发冠 + 繁复的华丽丝绸**。
+    玉璧本身是春秋战国正统礼器，**不算穿帮**，已从 ANACHRONIC_MARKERS 移除 ——
+    否则任何佩玉璧的先秦角色都会被误阻塞。
+
     这与 RAGGED_NO_PLAIN 不同：那个是风险因子（p04 中招 p08 没中招），
     这个是**确凿的史实错误**，且在 i2i 模式下会污染所有含该角色的页面。
 
@@ -694,9 +731,10 @@ def _f_era_anachronism(storyboard, p: dict) -> list[Finding]:
         out.append(Finding(
             None, "block", "ERA_ANACHRONISM",
             f"角色「{nm}」的视觉签名含后世器物 {hits}（{where}）",
-            "先秦人物不该有金质发冠/玉璧/龙纹/繁复织锦 —— 模型会忠实照画。"
+            "先秦人物不该有金质发冠/龙纹/繁复织锦 —— 模型会忠实照画。"
             "实测 kc_1790664590：夫差被画成明清帝王，每页都错。"
-            "改成素麻/葛布/深色圆领袍 + 发束高髻缠布带这类本时代形制"))
+            "改成素麻/葛布/深色圆领袍 + 发束高髻缠布带这类本时代形制"
+            "（注：玉璧是春秋战国正统礼器，不在穿帮词表内）"))
     return out
 
 
@@ -723,9 +761,11 @@ def _f_punchline(p: dict) -> list[Finding]:
     if not pl:
         out.append(Finding(p["page"], "warn", "PUNCH_EMPTY",
                            "缺 punchline —— 「定格瞬间」是本章节的记忆点"))
-    elif len(pl) > 30:
+    elif len(pl) > PUNCH_MAX:
+        # v0.3.24：原先写死 30，但同一条的文案却告诉用户「10-22 字」——
+        # 代码和自己的提示自相矛盾。按 prompt 铁律 7.2 的 22 收口。
         out.append(Finding(p["page"], "warn", "PUNCH_LONG",
-                           f"punchline {len(pl)} 字偏长，记忆点要短（10-22 字）"))
+                           f"punchline {len(pl)} 字偏长，记忆点要短（{PUNCH_MAX} 字内）"))
     return out
 
 
@@ -734,9 +774,11 @@ def _f_dialogue(p: dict) -> list[Finding]:
     if not d:
         return [Finding(p["page"], "warn", "QUOTE_EMPTY",
                         "缺文言引文 —— 图下蒙版会空着")]
-    if len(d) > 90:
-        return [Finding(p["page"], "warn", "QUOTE_LONG",
-                        f"文言引文 {len(d)} 字偏长，蒙版放不下")]
+    if len(d) > QUOTE_MAX:
+        # v0.3.24：原先放行到 90 字，与 prompt 铁律 7.1 的 50 字上限脱节。
+        out = [Finding(p["page"], "warn", "QUOTE_LONG",
+                       f"文言引文 {len(d)} 字偏长，蒙版放不下（{QUOTE_MAX} 字内）")]
+        return out
     return []
 
 

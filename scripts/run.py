@@ -31,11 +31,32 @@ import argparse
 import json
 import sys
 import time
-from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
 SKILL_ROOT = Path(__file__).resolve().parent.parent  # scripts/run.py → parent.parent = knowledge-comic/
 sys.path.insert(0, str(SKILL_ROOT))
+
+
+def _safe_stdout() -> None:
+    """让 print() 在任何控制台编码下都不会崩。
+
+    Windows 中文控制台默认 GBK(cp936)，编不了 🔴 🟡 这类非 BMP emoji。
+    实测 v0.3.22：preflight 报告里一个 🔴 就让 `run.py all` 直接
+    UnicodeEncodeError 挂掉 —— 而且是**阻塞分支**才触发，通关时不炸，
+    所以很容易漏测。这里 errors='replace' 让编不出的字符退化成 '?'
+    而不是抛异常；report() 本身已改用纯文本标记，正常路径不会有字符损失。
+
+    Mavis 宿主里 stdout 已被重定向，reconfigure 不影响原有行为。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError, OSError):
+            # 旧 Python 或已被替换的流 —— 忽略，保持原有行为
+            pass
+
+
+_safe_stdout()
 
 from scripts.core.config import get_config  # noqa: E402
 from scripts.core.planner import plan_storyboard, Storyboard, StoryPage, recommend_pages  # noqa: E402
@@ -48,11 +69,32 @@ from scripts.core.review_page import check_quality, render_html, render_markdown
 from scripts.core.prompts import (  # noqa: E402
     recommend_style,
     recommend_template,
-    get_style,
 )
 
 
 # ============ Mavis 对话工作流 API（推荐入口） ============
+
+def _progress_printer(label: str, t0: float | None = None):
+    """v0.3.24: 生成 progress_cb，把跑图进度打到 stdout。
+
+    为什么加这个：`image_gen.generate_pages` 一直有 `progress_cb` 形参，
+    但 run.py 两个调用点都没传 —— 8~12 页每页 20~40s，整段 3~6 分钟
+    **零输出**。用户既不知道在跑还是死了，也看不到跑到第几张。
+    同一类事故还有角色参考图（2 角色 × 4 视图 = 8 张），一并补上。
+
+    签名对齐 image_gen：`cb(done, total, page_or_label)`。
+    """
+    start = t0 if t0 is not None else time.time()
+
+    def _cb(done: int, total: int, label_: object) -> None:
+        elapsed = int(time.time() - start)
+        eta = ""
+        if done > 0 and total > done:
+            eta = f", 约还需 {int(elapsed / done * (total - done))}s"
+        print(f"[gen] {label} {done}/{total} done ({elapsed}s{eta}) -> {label_}", flush=True)
+
+    return _cb
+
 
 def step_plan(
     topic: str,
@@ -101,7 +143,23 @@ def step_plan(
         num_pages = recommend_pages(len(bullets))
         print(f"[auto-pages] 推荐 {num_pages} 页 (基于 {len(bullets)} 个 bullet)")
 
-    sb = plan_storyboard(topic, bullets, style_id, use_llm=use_llm, num_pages=num_pages)
+    # v0.3.24: 接入 canon 一致性约束。
+    # 之前只有 scripts/run_plain.py 调 get_canon_injection()，**主流程 run.py
+    # 从没接过** —— 特性看起来是活的（planner 签名里 canon_injection 参数一路
+    # 传到 _build_planner_user_msg），实际上恒为 ""，data/canon.md 是死配置。
+    # 现在接上；data/canon.md 是空模板 → 注入为 "" → 行为与之前完全一致，
+    # 用户填了内容才会真正生效。
+    canon_inj = ""
+    try:
+        from scripts.canon import get_canon_injection
+        canon_inj = get_canon_injection()
+    except Exception as e:  # pragma: no cover - canon 是可选增强，不该拖垮主流程
+        print(f"[canon] 跳过（{e}）")
+    if canon_inj:
+        print(f"[canon] 已注入一致性约束 {len(canon_inj)} 字符")
+
+    sb = plan_storyboard(topic, bullets, style_id, use_llm=use_llm, num_pages=num_pages,
+                         canon_injection=canon_inj)
 
     # v0.2.5/0.2.6: 人物一致性 — characters 列表挂到 storyboard
     if characters:
@@ -112,8 +170,8 @@ def step_plan(
         print(f"[auto-characters] LLM 自动提取 {len(characters)} 个角色")
     elif _is_character_story(topic):
         # v0.2.6: 强制提示 — topic 看起来是人物故事但 LLM 没提取到
-        print(f"[auto-characters] WARNING: topic 看起来是人物故事，但 planner 没提取 characters。"
-              f"建议手动传入 step_plan(..., characters=[...]) 启用 i2i 人物一致性")
+        print("[auto-characters] WARNING: topic 看起来是人物故事，但 planner 没提取 characters。"
+              "建议手动传入 step_plan(..., characters=[...]) 启用 i2i 人物一致性")
 
     job_id = f"kc_{int(time.time())}"
     work_dir = work_root / job_id
@@ -288,6 +346,7 @@ def step_gen_images(
             characters=sb.characters,
             style_id=sb.style_id,
             job_id=job_id,
+            progress_cb=_progress_printer("charref"),
         )
 
     if regenerate_pages:
@@ -306,6 +365,7 @@ def step_gen_images(
             preface=sb.preface,
             epigraph=sb.epigraph,
             postscript=sb.postscript,
+            sources=sb.sources,
             characters=sb.characters,
         )
         # v0.3.14：把 force_pages 传下去。
@@ -315,6 +375,7 @@ def step_gen_images(
             rerender_sb, job_id,
             character_refs=character_refs,
             force_pages=set(regenerate_pages),
+            progress_cb=_progress_printer("regen"),
         )
         # 替换原路径
         existing = {int(p.stem.split("-")[0]): i for i, p in enumerate(_current_images(work_dir))}
@@ -328,7 +389,11 @@ def step_gen_images(
         _run_visual_qa(job_id, data_dir=work_root)
         return all_paths
     else:
-        paths = generate_pages(sb, job_id, character_refs=character_refs)
+        paths = generate_pages(
+            sb, job_id,
+            character_refs=character_refs,
+            progress_cb=_progress_printer("page"),
+        )
         print(f"[gen] 生成 {len(paths)} 张")
         _run_alignment_check(sb_path)
         _run_visual_qa(job_id, data_dir=work_root)
@@ -442,7 +507,7 @@ def step_publish_draft(
         result = pub_mod.add_permanent_image(path)
         uploaded.append({"page": i, "media_id": result["media_id"], "url": result["url"]})
         wechat_urls.append(result["url"])
-        print(f"OK")
+        print("OK")
 
     # v0.3.1: thumb_page 校验(1-based, 必须在 [1, len(uploaded)] 范围)
     if not (1 <= thumb_page <= len(uploaded)):
@@ -577,7 +642,7 @@ def step_story_script(
         for r in risky:
             no = r["page"]
             page = next((x for x in pages if x.get("page") == no), {})
-            tag = "🔴" if r["severity"] == "high" else "🟡"
+            tag = "[阻塞]" if r["severity"] == "high" else "[建议]"
             lines.append(f"{tag} **p{no:02d}** {page.get('highlight', '')}")
             for label, key in (("caption 里的动作画面没画", "caption_missing_actions"),
                                ("caption 里的人物画面没画", "caption_missing_entities")):
@@ -659,10 +724,10 @@ def step_layout_preview(
     body_lens = [len((p.body or "").strip()) for p in sb.pages]
     kw_total = sum(len(p.keywords or []) for p in sb.pages)
     print(f"[preview] template={template_id}  html={html_path}  size={len(html)} chars")
-    print(f"[preview] 含排版成品 + 每页分镜要素（主体/动作/配角/背景/景别/情绪）")
+    print("[preview] 含排版成品 + 每页分镜要素（主体/动作/配角/背景/景别/情绪）")
     print(f"[preview] {n} 页 · 正文平均 {sum(body_lens)//max(n,1)} 字 · "
           f"关键词共 {kw_total} 个（朱砂红高亮）")
-    print(f"[preview] 确认图文相符后再跑 step_gen_images 生图")
+    print("[preview] 确认图文相符后再跑 step_gen_images 生图")
     return html_path
 
 
@@ -935,7 +1000,6 @@ def _is_character_story(topic: str) -> bool:
     - 含已知历史人物名（郭子仪/岳飞/...）→ True
     - 含"单骑/退/入/破/斩/救"等动作 + 人名模式 → True
     """
-    topic_lower = topic.lower()
     # 1) 已知人物名
     for name in _CHARACTER_STORY_NAMES:
         if name in topic:
@@ -961,6 +1025,7 @@ def _load_storyboard(sb_path: Path) -> Storyboard:
         preface=raw.get("preface", ""),
         epigraph=raw.get("epigraph", ""),
         postscript=raw.get("postscript", ""),
+        sources=raw.get("sources", ""),
         characters=raw.get("characters", []),
         recommended_template=raw.get("recommended_template", ""),
         pages=[StoryPage(**p) for p in raw["pages"]],
@@ -1018,7 +1083,6 @@ def _cli_main() -> int:
 
     if args.cmd == "all":
         sb, job_id, work_dir = step_plan(args.topic, args.bullets, args.style, args.template, data_dir=data_dir)
-        style_id = args.style or sb.style_id
         template_id = args.template or "e"
         image_paths = step_gen_images(job_id, data_dir=data_dir)
         step_render_article(job_id, template_id, image_paths, data_dir=data_dir)

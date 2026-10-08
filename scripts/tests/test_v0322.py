@@ -34,17 +34,16 @@ from __future__ import annotations
 
 import json
 import sys
-import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from scripts.core.prompts import (                                    # noqa: E402
-    LIANHUANHUA_STYLE_LOCK, ZERO_TEXT_BOOST, build_image_prompt,
+    LIANHUANHUA_STYLE_LOCK, build_image_prompt,
 )
 from scripts.core.planner import PLANNER_SYSTEM_PROMPT                # noqa: E402
-from scripts.core.preflight import PreflightResult, run_preflight     # noqa: E402
+from scripts.core.preflight import run_preflight     # noqa: E402
 from scripts.core.visual_qa import VisualQAResult, VisualFinding      # noqa: E402
 
 STYLE = "chinese_lianhuanhua_classic"
@@ -83,18 +82,49 @@ def test_style_lock_rejects_modern_interior() -> None:
 # --- [2] planner schema gender enum ------------------------------------------
 
 def test_planner_schema_gender_enum() -> None:
-    """planner prompt 里的 JSON schema 必须用 enum 而不是字符串。"""
-    print("\n[2] planner schema gender enum")
-    # 直接字符串搜：JSON schema 段必须出现 `enum: ["male", "female"]`
-    check(
-        "JSON schema 含 enum: male/female",
-        '"enum": ["male", "female"]' in PLANNER_SYSTEM_PROMPT
-        or "'enum': ['male', 'female']" in PLANNER_SYSTEM_PROMPT
-        or "enum: [\"male\", \"female\"]" in PLANNER_SYSTEM_PROMPT,
-    )
-    # 铁律 7.4 必须显式提到 enum
-    check("铁律 7.4 提到 enum 强化",
-          "enum" in PLANNER_SYSTEM_PROMPT and "v0.3.22" in PLANNER_SYSTEM_PROMPT)
+    """planner prompt 必须把 gender 约束成"两个裸字符串之一"。
+
+    v0.3.24 修正这个断言本身
+    --------------------------
+    原断言要求 prompt 里出现 `"enum": ["male", "female"]`。**JSON 没有 enum
+    这个关键字** —— 那写法在 schema 示例里等于告诉 LLM 输出一个嵌套对象
+    `{"enum": [...]}`，而 preflight 的 `resolve_gender()` 只认字符串
+    `"male"` / `"female"`，于是 LLM 照抄示例 → CHAR_GENDER_MISSING 阻塞 →
+    一张图都不跑。**测试把 bug 锁成了"规范"**，v0.3.22 的事故就来自这里。
+
+    现在断言真实意图，用可执行的三条：
+      1. JSON 示例里 gender 是**裸字符串**且取值合法
+      2. 正文显式禁止嵌套对象 / 数组 / 中文值 / 缺字段
+      3. 示例块本身是**合法 JSON**（能被 json.loads 吃下）
+    """
+    print("\n[2] planner schema gender 约束为裸字符串")
+    import json as _json
+    import re as _re
+
+    # (1) 合法 JSON 示例 + 裸字符串
+    m = _re.search(r"```json\n(.*?)\n```", PLANNER_SYSTEM_PROMPT, _re.S)
+    check("存在 ```json 输出示例块", m is not None)
+    if m:
+        try:
+            doc = _json.loads(m.group(1))
+            g = doc.get("characters", [{}])[0].get("gender")
+            check("示例 JSON 本身合法", True)
+            check("gender 是裸字符串 male/female",
+                  isinstance(g, str) and g in ("male", "female"), f"实际={g!r}")
+        except Exception as e:  # noqa: BLE001
+            check("示例 JSON 本身合法", False, repr(e))
+
+    # (2) 正文显式禁止错误写法
+    check("显式禁止 gender 写成对象/数组",
+          "不是 `{\"enum\"" in PLANNER_SYSTEM_PROMPT
+          or "裸字符串" in PLANNER_SYSTEM_PROMPT)
+    check("显式点名禁止 男/man/M 等脏值",
+          all(tok in PLANNER_SYSTEM_PROMPT for tok in ("男", "man", "male")))
+    check("说明写错的后果（会被拦下不跑图）",
+          "拦下" in PLANNER_SYSTEM_PROMPT or "阻塞" in PLANNER_SYSTEM_PROMPT)
+    # (3) 旧错误模式必须已消失
+    check("已不再使用 JSON 里不存在的 enum 关键字",
+          '{"enum": ["male", "female"]}' not in PLANNER_SYSTEM_PROMPT)
 
 
 # --- [3] preflight CHAR_GENDER_MISSING 强制阻塞 ------------------------------

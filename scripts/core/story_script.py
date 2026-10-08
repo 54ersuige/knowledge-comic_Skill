@@ -103,7 +103,7 @@ _TERM_ZH = {
     "willow": "柳", "tomb": "坟墓", "bones": "白骨", "skeleton": "骸骨",
     "tundra": "苔原", "wasteland": "荒原", "wilderness": "荒野",
     "dungeon": "地牢", "prison": "牢房", "snowfield": "雪原",
-    "ridge": "山脊", "horizon": "地平线", "gale": "狂风", "blizzard": "暴风雪",
+    "ridge": "山脊", "gale": "狂风", "blizzard": "暴风雪",
     "flames": "火焰", "firelight": "火光", "moonlight": "月光",
     "darkness": "幽暗", "gloom": "阴翳", "crowd": "人群",
     # 形容词 / 材质 / 器物（v0.3.7 第二轮补：残留英文集中在这些词）

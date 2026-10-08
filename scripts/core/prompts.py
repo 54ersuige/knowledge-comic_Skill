@@ -87,8 +87,14 @@ LIANHUANHUA_STYLE_LOCK = (
 # 3) 时代穿帮词：用于 preflight 检测 characters[].visual_signature
 #    是否被 planner 写成了后世帝王形象（实测夫差被写成"华丽丝绸+金质发冠"，
 #    春秋吴王每页都画成明清帝王）。这些是**检测用**的表，不进 prompt。
+#
+# v0.3.23 修正：移出「玉璧」。玉璧是春秋战国**正统礼器**
+# （蔺相如完璧归赵即战国故事），先秦人物佩玉璧完全合理。
+# 原事故里夫差签名写的是「金质发冠 + 繁复的华丽丝绸」，
+# 玉璧只是顺带被列进表里，被误当成穿帮主因。
+# 保留真正错配项：金质发冠 / 龙纹 / 补子 / 乌纱 / 蟒袍 / 顶戴 / 朝珠 …
 ANACHRONIC_MARKERS = [
-    "金质发冠", "玉璧", "龙袍", "龙纹", "补子", "乌纱", "乌纱帽", "官帽",
+    "金质发冠", "龙袍", "龙纹", "补子", "乌纱", "乌纱帽", "官帽",
     "朝服", "蟒袍", "雕龙", "织金", "点绣", "补服", "顶戴", "翎羽", "朝珠",
     "紫砂", "扶手椅", "沙发", "玻璃窗", "油灯", "蜡烛", "机械钟", "折扇",
     "繁复", "华丽",
@@ -471,12 +477,12 @@ KNOWN_GENDER: dict[str, str] = {
     "岳飞": "male", "文天祥": "male", "辛弃疾": "male", "陆游": "male",
     "苏轼": "male", "王安石": "male", "寇准": "male", "包拯": "male",
     "虞允文": "male", "毕再遇": "male", "王坚": "male", "余玠": "male",
-    "文种": "male", "曾国藩": "male", "左宗棠": "male", "林则徐": "male",
+    "曾国藩": "male", "左宗棠": "male", "林则徐": "male",
     "郑成功": "male", "戚继光": "male", "袁崇焕": "male", "李自成": "male",
     "朱元璋": "male", "朱棣": "male", "康熙": "male", "雍正": "male",
     "乾隆": "male", "崇祯": "male", "秦桧": "male", "韩世忠": "male",
     "孙中山": "male", "鲁迅": "male", "蔡元培": "male",
-    "文成公主": "female", "王昭君": "female", "杨门女将": "female",
+    "文成公主": "female", "杨门女将": "female",
     "王宝钏": "female", "秦香莲": "female", "卓文君": "female",
 }
 
@@ -902,7 +908,16 @@ _ZH_NOTE_RE2 = _re.compile(r"\s*//\s*[一-鿿][一-鿿\s·、,，]*?(?=\b[A-Z][A
 # **安全性论证**：右括号 `)` 硬性界定匹配边界，匹配内容 100% 是汉字，
 # 因此**不可能吞掉括号外的任何英文**。这与 v0.3.15 之前那个带 `$` 兜底的
 # 宽泛正则（把 p1 visual 从 981 截到 171 字符）有本质区别。
-_ZH_GLOSS_RE = _re.compile(r"\s*[（(][\u4e00-\u9fa5]{1,8}[)）]\s*")
+_ZH_GLOSS_RE = _re.compile(r"\s*[（(][一-鿿]{1,8}[)）]\s*")
+
+# v0.3.18：CONCEPT 段抽取正则。
+# planner 要求每页 visual 首段写 `CONCEPT: <核心概念> → <画面里的具体元素> // 中文速记`，
+# build_image_prompt 把它整段提到 prompt 头部（最高权重区）。
+# 右边界用「下一个大写要素标签」或行尾，双保险，避免吞掉 SUBJECT 及之后的内容。
+_CONCEPT_RE = _re.compile(
+    r"CONCEPT\s*[:：]\s*(.*?)(?=\n\s*(?:SUBJECT|ACTION|CAMERA|PLACEMENT|DEPTH|LIGHTING|MOOD)\b|\Z)",
+    _re.IGNORECASE | _re.DOTALL,
+)
 
 
 def _strip_cinematic_terms(text: str) -> str:
@@ -964,10 +979,21 @@ def build_image_prompt(
         # 实测苏武牧羊：带速记跑图 10 张全部跑偏成彩绘风/庭院景，
         # 完全不是宣纸工笔连环画，且雪原/地窖/草原全被画成中式庭院。
         # 根因是中文速记混进英文 prompt 后，风格锁定被中文语义冲淡。
+        #
+        # v0.3.18 关键修复：CONCEPT 段**必须原样保留**。
+        # 之前它跟中文速记一起被 _ZH_GLOSS_RE 抹成了 " "，
+        # 导致 CONCEPT 文字残留但分隔符消失，直接粘在 SUBJECT 上
+        # （"...摸向腰间佩剑Subject: Zhaowu..."）。
+        concept_zh = _CONCEPT_RE.search(scene_description)
+        concept_text = concept_zh.group(1).strip() if concept_zh else ""
         scene_description = _ZH_NOTE_RE2.sub("", scene_description)
         scene_description = _ZH_NOTE_RE.sub("", scene_description)
         scene_description = _ZH_GLOSS_RE.sub(" ", scene_description)
+        # CONCEPT 段整体从 scene 移出（下面单独提到 prompt 头部）
+        scene_description = _CONCEPT_RE.sub(" ", scene_description)
         scene_description = _re.sub(r"\s{2,}", " ", scene_description).strip()
+    else:
+        concept_text = ""
 
     # v0.2.10 修复: 中国画风格强化 STRICT STYLE 夹击 —— 头部 + 角色锚点后再次重复,
     # 防止 agnes 看到 subject 描述里的"armor / map table / looking up"等现代写实关键词跑偏。
@@ -988,8 +1014,28 @@ def build_image_prompt(
         截断路径，两条约束全丢，图直接崩成西式书房（kc_1790664590 p09）。
 
         **消除重复而不是再补一次**，这样结构上不可能再漏。
+
+        v0.3.18 关键改动：**CONCEPT 段提到 prompt 头部**。
+        实测 kc_1790740537：CONCEPT 原本落在第 4703/9700 字符（正中间），
+        而图像模型对 prompt **前 30%** 的关键词权重最高。位置一挪到中间，
+        CONCEPT 里的「皮卷地图」「大开城门」「十万魏军」全被 i2i 角色参考图
+        挤掉，8 页里 7 页跑偏（日式客厅 / 日本武士 / 3D 渲染桌面）。
+        CONCEPT 是「这页要画什么」的唯一指令，必须占最高权重区。
         """
+        concept_block = ""
+        if concept_text:
+            # 剥掉 CONCEPT 段里的 `// 中文速记`（给人看的，不进图像 prompt）
+            concept_en = _ZH_NOTE_RE.sub("", concept_text).strip()
+            concept_en = _re.sub(r"\s{2,}", " ", concept_en)
+            if concept_en:
+                concept_block = (
+                    "\n\n=== WHAT THIS FRAME MUST SHOW (highest priority, "
+                    "these elements MUST be visibly present in the image) ===\n"
+                    f"{concept_en}\n"
+                    "=== END OF MUST-SHOW BLOCK ===\n\n"
+                )
         return (
+            f"{concept_block}"
             f"{style_prefix}"
             f"{style.prompt_en} "
             f"{character_anchor} "

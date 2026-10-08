@@ -1,4 +1,16 @@
-"""Skill 端到端 · 非交互版（绕开 argparse + input + 加 review/canon）
+"""【已归档 · v0.3.24】Skill 端到端 · 非交互版（绕开 argparse + input + 加 review/canon）
+
+**为什么归档**：本脚本依赖 `scripts/review.py` 的 `review_storyboard(sb)`，返回带
+`.total` / `.dimensions['depth'|'consistency'|'voice']` / `.passed` 的评分对象。
+那个 API 已被整体删除（review.py 现在只有 `dump_storyboard` / `set_page_field` /
+`render_summary_for_user`），所以本脚本在 HEAD 上就已经**无法 import**
+（ImportError: cannot import name 'review_storyboard'），不是本次改动弄坏的。
+重试评分循环要重建那套评分 API 属于另起炉灶，超出修复范围。
+
+它唯一的独有价值（`get_canon_injection()` 注入 canon）已在 v0.3.24 接到主流程
+`run.py` 的 `step_plan`，所以归档不丢功能。
+
+保留在此仅为可回溯。**主流程用 `scripts/run.py`，测试用 `scripts/run_tests.py`。**
 
 流程：
   plan → review → (重试 if score < 80) → image gen → render → publish
@@ -17,7 +29,7 @@ SKILL_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL_ROOT))
 
 from scripts.core.config import get_config
-from scripts.core.planner import plan_storyboard, Storyboard
+from scripts.core.planner import plan_storyboard
 from scripts.core.image_gen import generate_pages
 from scripts.core import article as article_mod
 from scripts.core import publisher as pub_mod
@@ -172,7 +184,7 @@ def run_end_to_end(
     print(f"  draft_media_id: {draft_id}")
     print(f"  title:          {sb.title}")
     print(f"  uploaded:       {len(uploaded)} images")
-    print(f"  go to:          https://mp.weixin.qq.com → 草稿箱")
+    print("  go to:          https://mp.weixin.qq.com → 草稿箱")
 
     return {
         "job_id": job_id,

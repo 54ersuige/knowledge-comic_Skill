@@ -23,13 +23,26 @@ import html as _html
 import re
 from dataclasses import dataclass
 
-# 硬约束阈值（与 planner.py 的 prompt 铁律保持一致）
-BODY_MIN = 100
-BODY_MAX = 150
-KEYWORDS_MIN = 3
-KEYWORDS_IDEAL = 5
-VISUAL_MIN = 300
-MULTI_FIGURE_MIN = 2
+# v0.3.24：阈值全部来自 thresholds.py（唯一真源），不再本地写死。
+# 原先这里 BODY_MIN=100 / BODY_MAX=150 当硬边界报错，与 preflight 的
+# 「目标带 100-150、>170 才阻塞」直接冲突 —— 同一次跑两份矛盾结论。
+# 现按 preflight 的分段语义对齐：>硬上限=error，>目标上限=warn，<偏薄线=warn。
+from scripts.core.thresholds import (
+    BODY_HARD_HI,
+    BODY_TARGET_HI,
+    BODY_TARGET_LO,
+    BODY_WARN_LO,
+    KEYWORDS_IDEAL,
+    KEYWORDS_MAX,
+    KEYWORDS_MIN,
+    MULTI_FIGURE_MIN,
+    VISUAL_MIN,
+    describe_body_policy,
+)
+
+# 兼容旧引用名（外部脚本/报告模板可能还在 import BODY_MIN / BODY_MAX）
+BODY_MIN = BODY_TARGET_LO
+BODY_MAX = BODY_TARGET_HI
 
 
 @dataclass
@@ -49,17 +62,24 @@ class Issue:
 # --- 单项检查 ---------------------------------------------------------------
 
 def _check_body(p: dict, is_story: bool) -> Issue | None:
-    """正文长度。用户偏好：100-150 字硬上限，图为主文字为脚注。"""
+    """正文长度。对齐 preflight 的分段语义（v0.3.24）。
+
+    用户的 100-150 是**目标带**不是硬边界 —— preflight v0.3.15 的事故记录：
+    93/95/154 字全被判不合格。所以这里也只把「压过画面」当真问题。
+    """
     body = (p.get("body") or "").strip()
     if not body:
         return Issue(p["page"], "error", "body", "正文为空")
     n = len(body)
-    if n > BODY_MAX:
+    if n > BODY_HARD_HI:
         return Issue(p["page"], "error", "body",
-                     f"正文 {n} 字，超出 {BODY_MAX} 字上限（文字太重会压过画面）")
-    if n < BODY_MIN:
+                     f"正文 {n} 字，超过 {BODY_HARD_HI} 字硬上限（文字太重会压过画面）")
+    if n > BODY_TARGET_HI:
         return Issue(p["page"], "warn", "body",
-                     f"正文 {n} 字，低于 {BODY_MIN} 字下限（可补画面没说的事）")
+                     f"正文 {n} 字略超目标上限 {BODY_TARGET_HI} 字（{describe_body_policy()}）")
+    if n < BODY_WARN_LO:
+        return Issue(p["page"], "warn", "body",
+                     f"正文 {n} 字偏薄（{describe_body_policy()}）")
     return None
 
 
@@ -71,6 +91,9 @@ def _check_keywords(p: dict) -> Issue | None:
     if len(kws) < KEYWORDS_MIN:
         return Issue(p["page"], "warn", "keywords",
                      f"keywords 仅 {len(kws)} 个，建议 {KEYWORDS_IDEAL}+ 个")
+    if len(kws) > KEYWORDS_MAX:
+        return Issue(p["page"], "warn", "keywords",
+                     f"keywords {len(kws)} 个偏多，正文里会碎成一片（上限 {KEYWORDS_MAX}）")
     return None
 
 
@@ -105,7 +128,7 @@ def _check_multi_figure(p: dict, style_id: str) -> Issue | None:
                "CROWD", "GUARDS", "SOLDIER", "MULTIPLE FIGURES", "3+")
     if not any(m in v for m in markers):
         return Issue(p["page"], "warn", "visual",
-                     "画面似为单人物 —— 连环画风格要求 3+ 主人物 + 远景配角 + 多道具")
+                     f"画面似为单人物 —— 连环画风格要求 {MULTI_FIGURE_MIN}+ 主人物 + 远景配角 + 多道具")
     return None
 
 
@@ -183,7 +206,6 @@ def render_markdown(raw: dict, health: dict) -> str:
     结构：标题 → 自动体检看板 → 问题页详情 → 全部页一览
     问题页展开 caption/body/keywords/visual 全字段；正常页只给一行。
     """
-    e = _html.escape
     stats = health["stats"]
     issues = health["issues"]
     pages = raw.get("pages", [])
@@ -209,7 +231,7 @@ def render_markdown(raw: dict, health: dict) -> str:
     if err == 0 and warn == 0:
         out.append("✅ 全部硬约束通过")
     else:
-        head = "🔴" if err else "🟡"
+        head = "[阻塞]" if err else "[建议]"
         out.append(f"{head} **{err} 个必修项** / {warn} 个建议项")
     out.append("")
     out.append("| 检查项 | 结果 |")

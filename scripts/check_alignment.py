@@ -80,6 +80,46 @@ ACTION_VERB_MAP: dict[str, list[str]] = {
 }
 
 
+# === v0.3.18 CONCEPT 具象化检查 ===
+# 背景：v0.2.3 七要素只管镜头语言，产出全是"古风场景快照" —— 正文讲"算账"，
+# 画面画"两人说话"，图文各说各话（用户实图反馈：「图片与内容符合度关联性偏弱」）。
+# v0.3.18 在 planner 里强制每页 visual 首段写 CONCEPT，把概念转成可见元素。
+# 本模块**验**这条铁律有没有被遵守。
+
+# CONCEPT 右侧（→ 之后）出现这些词 = 没具象化，还在写抽象概念
+_ABSTRACT_MARKERS = (
+    "concept", "idea", "abstract", "metaphor", "symbol", "symbolise", "symbolize",
+    "represents", "representing", "the concept of", "spirit", "feeling of",
+    "strategy", "thinking", "notion", "theme",
+)
+
+# CONCEPT 段里出现这些词 = 有画面载体（可信的具象化）
+_VISIBLE_MARKERS = (
+    "table", "board", "map", "scroll", "coin", "token", "tally", "pebble", "stone",
+    "scale", "balance", "chess", "piece", "wall", "gate", "tent", "army", "soldier",
+    "fire", "smoke", "water", "river", "mountain", "bamboo", "wooden", "hand", "finger",
+    "gesture", "pointing", "pushing", "spreading", "open", "closed", "row", "line",
+    "sword", "bow", "arrow", "horse", "cart", "ladder", "rope", "torch", "lamp",
+)
+
+
+def check_concept(visual: str) -> dict:
+    """v0.3.18: 检查 visual 首段有没有 CONCEPT，且有没有真的具象化。
+
+    返回 {"has_concept": bool, "abstract": [...], "visible": bool}
+    """
+    m = re.search(r"CONCEPT\s*[:：](.*?)(?=\n\s*(?:SUBJECT|ACTION|CAMERA|\[GENDER)|\Z)",
+                  visual, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return {"has_concept": False, "abstract": [], "visible": False}
+
+    seg = m.group(1)
+    low = seg.lower()
+    abstract = [w for w in _ABSTRACT_MARKERS if w in low]
+    visible = any(w in low for w in _VISIBLE_MARKERS)
+    return {"has_concept": True, "abstract": abstract, "visible": visible}
+
+
 def extract_named_entities(text: str) -> set[str]:
     """从 body/caption 抽取关键人物名（中文）。"""
     entities: set[str] = set()
@@ -162,8 +202,21 @@ def check_page(page: dict) -> dict:
 
     # 严重度: caption 是场景说明，HIGH 仅在 caption 缺失时触发。
     # body 是上下文叙述，body 缺失只是 LOW (请 Mavis 复审)。
+    #
+    # v0.3.18: 加入 CONCEPT 检查 —— 「图文关联性偏弱」的直接防线。
+    # visual 没写 CONCEPT = 没交代这页在画什么概念（MEDIUM，人工补）
+    # CONCEPT 里全是抽象词 = 没具象化，等于没画（HIGH，图一定对不上正文）
+    concept = check_concept(visual)
+    concept_issue = None
+    if not concept["has_concept"]:
+        concept_issue = "缺 CONCEPT 段"
+    elif concept["abstract"] and not concept["visible"]:
+        concept_issue = f"CONCEPT 未具象化（抽象词 {concept['abstract']}，无可见载体）"
+
     severity = "ok"
-    if cap_act_missing:
+    if concept_issue:
+        severity = "high"
+    elif cap_act_missing:
         severity = "high"  # caption 动作缺失 = 图肯定不对
     elif cap_ent_missing and cap_coverage < 0.7:
         severity = "medium"  # caption 主角缺失
@@ -180,6 +233,7 @@ def check_page(page: dict) -> dict:
         "body_missing_entities": body_ent_missing,
         "body_missing_actions": body_act_missing,
         "caption_coverage": cap_coverage,
+        "concept_issue": concept_issue,
         "severity": severity,
     }
 
@@ -217,6 +271,8 @@ def print_report(report: dict) -> None:
         if r["severity"] != "ok":
             print(f"--- 第 {r['page']} 页 [{r['severity'].upper()}] ---")
             print(f"  caption: {r['caption']}")
+            if r.get("concept_issue"):
+                print(f"  [CONCEPT 问题] {r['concept_issue']}")
             if r["caption_missing_actions"]:
                 print(f"  [CAPTION 动作缺失] {r['caption_missing_actions']}")
             if r["caption_missing_entities"]:

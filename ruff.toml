@@ -1,0 +1,31 @@
+# ruff 配置（v0.3.24 新增）
+#
+# 之前项目没有 ruff 配置，`ruff check scripts/` 直接吐 62 条，其中绝大多数是
+# 测试文件里的 E402（"import 不在文件顶部"）—— 那是**刻意写法**：
+# `scripts/tests/test_*.py` 必须先 `sys.path.insert(SKILL_ROOT)` 才能 import
+# `scripts.core.*`，而且每个文件都要能**从任意目录单跑**（AGENTS.md 记过一次
+# "路径自解析"的返工）。所以这里对 tests/ 单独忽略这几条，而不是去改 8 个
+# 已验证的测试文件的结构。
+#
+# 用法：ruff check scripts/          # 全量
+#      ruff check scripts/core/      # 只查生产代码（必须 0 error）
+
+line-length = 120
+target-version = "py312"
+
+[lint]
+# 明确关心的规则集。默认只开 E4/E7/E9/F，补上 F601（重复 dict key 会静默覆盖，
+# 是本项目最在意的失效模式）和 E501。
+select = ["E4", "E7", "E9", "F", "F601"]
+
+[lint.per-file-ignores]
+# standalone 测试脚本：sys.path 先行 + 单行多语句是既有风格
+"scripts/tests/*.py" = ["E402", "E701", "E702"]
+# standalone CLI 脚本：同样要先 sys.path.insert(SKILL_ROOT) 才能 import core，
+# 改结构会破坏"从任意目录单跑"，所以只放行 E402
+"scripts/run_plain.py" = ["E402"]
+"scripts/publish_existing.py" = ["E402"]
+"scripts/render_only.py" = ["E402"]
+"scripts/mock_v3.py" = ["E402"]
+# prompts.py 末尾有一处运行期 import（避免与 planner 循环依赖），是有意为之
+"scripts/core/prompts.py" = ["E402"]

@@ -1,12 +1,133 @@
 ---
 name: knowledge-comic
 description: Knowledge comic generator that turns a topic + bullet list into a publication-ready WeChat MP draft. Use when user asks for "知识漫画", "公众号知识漫画", "科普漫画", "典故解读", "历史故事漫画", "一图读懂", "科普文章配图". Hands off the entire pipeline — style recommendation, storyboard split, image generation, article HTML render, and WeChat draft creation — through step-by-step Python APIs that Mavis calls directly inside the conversation.
-version: 0.3.17
+version: 0.3.24
 ---
 
-# Knowledge Comic (WeChat MP) — v0.3.17
+# Knowledge Comic (WeChat MP) — v0.3.24
 
 把「主题 + 要点」变成可一键发布到公众号草稿箱的知识漫画图文。**端到端在 Mavis 对话里逐步执行 + 用户拍板**。
+
+## v0.3.24 核心变化（2026-10-08，可观察性 + 结构性瘦身）
+
+**背景**：全量代码审计 + 7 个测试文件实跑 + prompt 逐段体积测量。发现的不是
+"某个值定错了"，而是四类**同一份东西被复制多份**导致的问题 —— 这个失效模式
+在项目里已经出现 4 次（v0.3.3 keywords 解析层漏字段 / v0.3.18 CONCEPT 段漏加黑名单 /
+v0.3.21 prompt 拼装双路径 / 本次阈值漂移）。
+
+### 0. 【阻塞级】planner prompt 里的 JSON 示例本身是非法 JSON
+
+`gender` 写成 `"gender": {"enum": ["male", "female"]}` —— **JSON 没有 `enum`
+这个关键字**，这写法等于教 LLM 输出嵌套对象。而 `resolve_gender()` 只认字符串，
+LLM 照抄示例 → `CHAR_GENDER_MISSING` 阻塞 → **一张图都不跑**。
+`characters` 那段还是两段对象字面量拼接（`[{...}]` 后面又跟 `{...}]`），
+`sources` 行有未转义的双引号。**整块"严格 JSON"示例三处语法错误。**
+
+更麻烦的是 v0.3.22 的测试 `test_v0322.py` 断言 prompt 里**必须出现**那个假 enum
+—— 测试把 bug 锁成了"规范"。现已改写为断言真实意图（示例块能被 `json.loads`
+吃下 + gender 是裸字符串 + 显式禁止嵌套对象）。
+
+**规则**：prompt 里给 LLM 看的 JSON 示例，必须能被 `json.loads()` 解析。
+`test_prompt_v0324.py` 现在每次都验这一条。
+
+### 1. 跑图全程无进度输出（每次都疼）
+
+`image_gen.generate_pages` 一直有 `progress_cb` 形参，但 `run.py` 两个调用点
+**都没传** —— 8~12 页每页 20~40s，整段 3~6 分钟零输出，用户既不知道在跑还是死了，
+也看不到跑到第几张。角色参考图（2 角色 × 4 视图）同样静默。
+
+现在 `_progress_printer()` 打印 `page 3/10 done (62s, 约还需 124s) -> p3`，
+ETA 按实测速率算。角色参考图也补了 `progress_cb`（缓存命中也算一步，
+否则命中多时进度条"卡住不动"反而更像挂死）。
+
+### 2. 测试跑不了一条命令
+
+`pytest scripts/tests` → **INTERNALERROR 退出码 3**。7 个测试文件是 standalone
+脚本（顶层 `assert` + 结尾 `sys.exit(0)`），pytest 收集阶段撞 `SystemExit`
+把整个 session 撞崩，只能一个一个手敲。
+
+新增 `scripts/run_tests.py`：子进程逐个跑 + 汇总表 + 明确退出码，
+不改动已验证的断言。`--live` 才跑烧额度的 live 冒烟，`-k` 按文件名过滤，
+`-v` 透传完整输出。当前 **7/7 通过，约 8s**。
+
+### 3. 五道检查层阈值已实际漂移 → 收敛到 `core/thresholds.py`
+
+| 规则 | preflight（阻塞关卡） | review_page（体检报告） | 后果 |
+|---|---|---|---|
+| body > 150 | warn | **error** | 同一次跑两份矛盾结论 |
+| body > 170 | block | 无此档 | 阻塞线比报告线还松 |
+| body < 90 | warn | 无此档 | 95 字正文被判「低于下限」 |
+| keywords < 3 | **无检查** | warn | 1 个关键词的页面能过阻塞关卡 |
+| punchline | 实按 30 放行，文案却写「10-22 字」 | 无检查 | 代码与自己的提示打架 |
+| dialogue | 实按 90 放行，与规则 50 脱节 | 无检查 | 同上 |
+
+新增 `core/thresholds.py` 作为**唯一真源**，preflight / review_page 都 import。
+修 `review_page` 的方向：preflight v0.3.15 的 docstring 记着事故原因
+（93/95/154 字全被判不合格），**preflight 是对的、review_page 是陈旧的**。
+补 preflight 缺失的 `KW_TOO_FEW`。`test_thresholds_v0324.py` 的重点不是
+"数值对不对"，而是**"某层偷偷自己写死一个数字"这件事会失败**。
+
+### 4. 22K 字符 system prompt 瘦身
+
+`PLANNER_SYSTEM_PROMPT` 22,064 → **14,578（历史题材，-34%）/ 13,297（非历史，-40%）**。
+
+做法不是删规则，是删三类**对 LLM 没有信息量**的内容：
+- **版本考古**：「v0.2.3 升级」「v0.3.0 新增，2026-09-24」
+- **事故复盘**：「**根因**：实测卧薪尝胆项目，planner 给勾践写圆领袍+武冠+幞头…」
+  —— 这是给人读的 changelog，模型只需要规则本身
+- **重复**：角色一致性原本散在 6 处（硬约束 / 视觉签名 / 五件套 bible /
+  v0.2.5 人物一致性 / 密度铁律 / 铁律 1）→ 合并成 §4.5；零文字 2 处 → 1 处；
+  镜头规则 2 处 → 1 处
+
+**朝代速查表改条件注入**（新增 `build_system_prompt()`）：速查表正文只存一份
+（`prompts.CN_DYNASTY_COSTUME_GUIDE`，与 preflight 共用），只在
+`chinese_lianhuanhua_classic` / `cn_xuanfeng` / `guochao_manhua` 三个风格注入。
+跑「峰终定律」这类经济学题材时，1.2K 字朝代服饰表是纯噪声。历史题材的考据
+约束一点没丢。顺带把 `PLANNER_SYSTEM_PROMPT.replace("输出 6-10 页", ...)`
+换成显式 `build_system_prompt(style_id, target_pages)` —— 原写法一旦改文案就静默失效。
+
+`test_prompt_v0324.py` 双向锁死：**22 条硬规则一条都不能丢**（CONCEPT / 三拍 /
+术语翻译 / 五件套 / GENDER / era / 零文字 / 七要素 / 中文速记 / 表情 anchor /
+连环画多人物 / 镜头分配 / caption 匹配 / dialogue 必填 / 史实 …），
+**7 类噪音必须消失**，条件注入逐风格验证。
+
+### 5. canon 一致性约束在主流程里是死的
+
+`canon_injection` 参数从 `plan_storyboard` 一路传到 `_build_planner_user_msg`，
+看起来是活的 —— 但 v0.3.24 之前**只有 `scripts/run_plain.py` 调
+`get_canon_injection()`，主流程 `run.py` 从没接过**，恒为 `""`。
+`data/canon.md` 是死配置。（`run_plain.py` 本身依赖一个已被删除的评分 API，
+在 HEAD 上就无法 import，v0.3.24 一并归档到 `_archive/`。）
+
+接上之前先处理了一个雷：该文件装的是**黑死病项目的专属数据**（"不要用
+鼠疫/黑死病"、1347 欧洲死亡率、墨西拿港口）。`canon.py` 会把解析结果
+**无条件注入每一次 planner 调用**，接上主流程后会污染所有无关主题。
+原内容完整保留为 `data/canon.blackdeath.md`（格式范例），`data/canon.md`
+改为**空模板**（注入长度实测 0，行为与之前完全一致）。
+
+顺带一个坑：`canon.py` 的解析器**不跳过 HTML 注释**，写在 `<!-- -->` 里的
+示例表格照样被当真规则解析（实测注释里的 1 行示例被读成 1 条术语 + 1 条数字）。
+所以空模板里一行表格都不能有。
+
+### 6. dev 镜像漂移校验自动化
+
+`AGENTS.md` 要求"同步完必须跑漂移校验"，但那条校验是**要人手动敲的 PowerShell**，
+所以从来没被稳定执行过 —— 实测 `article.py` 真源 1727 行 / 镜像 1721 行，
+**镜像缺 v0.3.18 双层蒙版修复**。
+
+新增 `scripts/check_drift.py`：逐文件行数 + SHA-256 比对，列出缺失 / 多余 /
+不一致三类漂移，退出码有意义。`--sync` 一步同步并复校。
+**纯人工约定 = 不会执行**，现在它是可跑的。
+
+### 7. 卫生
+
+- v0.3.23 一直没提交（13 个文件 modified，git HEAD 还停在 v0.3.22）→ 本版一并提交
+- SKILL.md 内部版本号又不对齐（frontmatter 0.3.23 vs 文件结构段 v0.3.22）——
+  正是 v0.3.2 修过的"三处版本号不一"同类复发，已对齐
+- `diagnose_prompt.py` / `diagnose_terms.py` 违反 v0.3.2 自己的规矩进了库
+  （一次性脚本该归 `_archive/`，它们不以 `_` 开头绕过了 `.gitignore`）→ 已 `git mv`
+- 根目录 9 个 `_*.txt` / `_tmp_*.py` 临时文件清掉（可恢复删除）
+
 
 ## When to use
 
@@ -40,6 +161,94 @@ python guide.py "张巡守睢阳"   # 中文主题
 ```
 
 返回 JSON：`{"style_id": "chinese_lianhuanhua_classic", "template_id": "c", "alternates": [...], "rationale": "..."}`
+
+## v0.3.23 核心变化（2026-09-30，两个可移植性 bug）
+
+**背景**：用户问「不依赖 Mavis、只靠这个 Skill 本身能不能跑」。实测跑
+`run.py all --dry-run`（勾践复国，真调 LLM，157s / 8 页 / 提取 2 个角色）
+暴露两个真问题。
+
+### 1. Windows GBK 崩溃（阻塞级 · 独立使用必挂）
+
+**症状**：`UnicodeEncodeError: 'gbk' codec can't encode character '\U0001f534'`
+崩在 `run.py` 的 `print(pre.report())`。
+
+**根因**：`preflight.py` 报告用 🔴 / 🟡 标记，**非 BMP 字符**在中文 Windows
+控制台（cp936）里编不了。三个放大因素：
+
+- **只在阻塞分支触发** —— 体检通过时不 print 报告，所以容易漏测
+- **崩在最不该崩的地方** —— 是 preflight 在**拦你**，结果拦截器自己先炸了
+- **Mavis 里测不出来** —— 宿主重定向了 stdout，UTF-8 编码，emoji 正常
+
+**修复**（两道）：
+1. `preflight.py` / `visual_qa.py` / `review_page.py` / `run.py` 四处报告
+   标记改**纯文本** `[阻塞]` / `[建议]`（✅❌⚠ 保留，GBK 能编）
+2. `run.py` 入口加 `_safe_stdout()` —— `stream.reconfigure(errors="replace")`，
+   任何未来新增的非 ASCII 字符退化成 `?` 而非抛异常
+
+### 2. `玉璧` 假阳性（阻塞级 · 春秋战国题材全中）
+
+**症状**：planner 给勾践写「佩玉璧」→ `ERA_ANACHRONISM` 硬阻塞。
+
+**根因**：`ANACHRONIC_MARKERS` 把 `玉璧` 列为先秦穿帮词。但**玉璧是春秋战国
+正统礼器**（蔺相如完璧归赵即战国故事）。原始事故 kc_1790664590 里，夫差真正
+穿帮的是「金质发冠 + 繁复的华丽丝绸」，`玉璧`只是顺带被列进表里当成了主因。
+
+**影响面**：这个 Skill 的主力题材就是春秋战国，**只要角色佩玉璧就必被阻塞**。
+
+**修复**：`玉璧` 从 `prompts.ANACHRONIC_MARKERS` 和 `preflight` 兜底副本中移除，
+并在 `_f_era_anachronism` 的 docstring 写清归因澄清。保留真正错配项：
+金质发冠 / 龙袍 / 龙纹 / 补子 / 乌纱 / 蟒袍 / 顶戴 / 朝珠 …
+**词表从 27 降到 26，但精度显著提升。**
+
+### 3. 附带修复：测试文件编码损坏
+
+`tests/test_preflight_v0315.py:271` 测试名含损坏字符 `单\ufffd\ufffd弱信号不报`
+（疑似历史编码事故），在 GBK 控制台下 `print` 抛 UnicodeEncodeError →
+**测试逻辑 93/93 全过但退出码 1**。已修正为「单独弱信号不报」。
+
+**验证**：7 个测试文件全部 rc=0（无任何编码豁免）；11 文件哈希一致。
+
+---
+
+## v0.3.19 - 0.3.22 核心变化（2026-09-29 ~ 09-30，角色锚点工程化）
+
+这四个版本是一组**「性别锚点」加固**，根因都是：角色参考图经 i2i 传进每一页，
+锚点一旦猜错，整批图全崩（实测 kc_1790664590 夫差被画成女性，污染全部含他的页面）。
+
+| 版本 | 改了什么 | 位置 |
+|---|---|---|
+| **0.3.19** | 角色签名指纹 —— `visual_signature` 变了就必须重画 4 视图参考图，不复用旧的 | `image_gen.py` |
+| **0.3.20** | **性别解析收敛为单一真源** `resolve_gender()`；page 级和 char 级都走它。原默认 `female` 改掉（男性主题会被默认成女性）；preflight 修两个真实缺陷 | `prompts.py` / `preflight.py` |
+| **0.3.21** | prompt 拼装唯一化 —— 原先主路径和超限截断路径有**两份几乎相同的拼装代码**，改一处漏另一处。统一为 `_assemble()` | `prompts.py` |
+| **0.3.22** | ① JSON schema `gender` 改 `enum: ["male","female"]`；② **`KNOWN_GENDER` 兜底表停止兜底** —— planner 必须自己填；③ MUST-SHOW fallback 复用 `_assemble`，不再 `assembled[:9790]` 硬切（那会砍掉 ZERO_TEXT_BOOST）；④ 连环画强锚不再锚现代室内物（卧薪尝胆 p06/p09 暴露）；⑤ preflight / visual_qa 落盘 JSON 报告 | 全模块 |
+
+**0.3.22 行为变更（重要）**：`CHAR_GENDER_MISSING` 现在是**阻塞**项，
+且不再用内置人名表兜底。`gender` 缺失 = 跑图前 SystemExit(1)，一张图都不跑。
+**用户手动传 `characters=` 时必须自己带上 `gender`。**
+
+---
+
+## v0.3.18 核心变化（2026-09-30，图文关联 + 文风定版）
+
+**根因**：用户实图反馈「看不懂」+「图文对不上」。两条都是文风问题，不只是画面问题。
+
+1. **术语翻译铁律（planner 4.1）** —— 「看不懂」的唯一根因是**文言术语裸奔**。
+   任何术语首次出现必须 `术语（大白话解释）`，且**一页最多 1 个**。
+   专有名词（人名/地名/朝代/官职）免解释。完整禁用清单 + 改写对照表见
+   `references/style_guide.md` §2.5.1。
+2. **正文三拍结构（planner 4.2）** —— 讲事 40-50 字 → **说破 40-60 字（最容易丢也最关键）** → 落点 20-30 字。
+3. **`CONCEPT:` 段** —— 画概念不画场景。`prompts.py` 把 MUST-SHOW 块提到最终 prompt
+   **第 6 字符**（原第 4703/9700 ≈ 48% 的位置，模型高权重区拿不到概念）。
+4. **负面提示词在本管线基本无效** —— 顽固偏差（明代乌纱帽、斗笠）要**改正面描述 + 塞进 CONCEPT 段**才压得住。
+5. **概念页 / 大场面页必须 `auto_char_refs=False`** —— i2i 角色参考图会压制 CONCEPT 里的场景。
+6. **模板 c 段数上限 `max_paras=3`** —— `max_len` 只管单句超长，4 个 20-50 字短句会原样切 4 段。
+7. **修史料脚注被逐字插空格** —— `" ".join(src)` 把《孙子兵法》渲染成《 孙 子 兵 法 》，无法检索/复制。
+8. **preflight 七要素黑名单补 5 项**（`concept` / `headwear` / `negative` / `avoid` / `wardrobe`）
+   —— v0.3.17 建的 `_SEVEN_ELEMENT_LABELS` 漏了 v0.3.18 新增的 `CONCEPT:`，
+   被 `_ACTOR_LINE_RE` 当成角色段 → `GENDER_PARTIAL` **永久误报阻塞**。
+
+---
 
 ## v0.3.17 核心变化（2026-09-29，朝代服饰考据铁律）
 
@@ -76,19 +285,40 @@ r = step_preflight_images(job_id)
 print(r["report"])   # {"blocked": bool, "blocks": [...], "warns": [...]}
 ```
 
-9 类检查：
+13 个检查函数 / 21 个 code（以 `core/preflight.py` 为准）：
 
-| code | 级别 | 拦什么 |
+**阻塞项（block）—— 一条不过就 SystemExit(1)，一张图都不跑**
+
+| code | 检查函数 | 拦什么 |
 |---|---|---|
-| `KW_EMPTY` | 阻塞 | keywords 为空 → 朱砂高亮整条链路失效 |
-| `HEDGING` | 阻塞 | 正文含「（或…）」「（实际为…）」→ LLM 不确定时的自我暴露 |
-| `BODY_LONG` | 阻塞 | 正文 > 170 字（文字会压过画面） |
-| `TEXT_INVITING` | 阻塞 | visual 含 calligraphy/inscribed/banner → 模型会当真画字 |
-| `NAME_UNKNOWN` | 建议 | 带身份头衔却不在正史表 → 疑似编造人物 |
-| `GENDER_PARTIAL` | 阻塞 | 前缀式多角色页有段漏标 `[GENDER]`（p9 常惠事故） |
-| `GENDER_NONE` | 建议 | 无性别标记且角色未登记进 `characters[]` |
-| `RAGGED_NO_PLAIN` | 建议 | 衣物写破损但无 `PLAIN unadorned` → 出字风险 |
-| `MODERN_TONE` | 建议 | 「极限测试」「破防」等现代口水词 |
+| `KW_EMPTY` | `_f_kw` | keywords 为空 → 朱砂高亮整条链路失效 |
+| `KW_TOO_MANY` | `_f_kw` | keywords 过密 → 高亮碎成一片（warn） |
+| `BODY_EMPTY` | `_f_body_len` | 正文为空 |
+| `BODY_LONG` | `_f_body_len` | 正文 > 170 字（硬上限；>150 软超为 warn） |
+| `HEDGING` | `_f_hedging` | 「（或…）」「（实际为…）」「我不确定」→ LLM 不确定时的自我暴露 |
+| `GENDER_PARTIAL` | `_f_gender` | 前缀式多角色页有段漏标 `[GENDER]`（p9 常惠事故） |
+| `TEXT_INVITING` | `_f_no_text_decl` | visual 含 calligraphy/inscribed/banner → 模型会当真画字 |
+| `CHAR_GENDER_MISSING` | `_f_char_gender` | **v0.3.22 起**：角色没填 `gender` → 阻塞，且 `KNOWN_GENDER` 表**不再兜底** |
+| `ERA_ANACHRONISM` | `_f_era_anachronism` | 角色 `visual_signature` 含后世器物（春秋角色写幞头等） |
+| `ALIGN_HIGH` | `run_preflight` | 图文不符高风险页（需传 `alignment`） |
+
+**建议项（warn）—— 只打印报告，不拦**
+
+| code | 检查函数 | 提示什么 |
+|---|---|---|
+| `BODY_LONG_SOFT` | `_f_body_len` | 正文略超 150 字目标 |
+| `BODY_SHORT` | `_f_body_len` | 正文 < 90 字偏薄 |
+| `MODERN_TONE` | `_f_modern_tone` | 「极限测试」「破防」「内卷」等现代口水词 |
+| `GENDER_NONE` | `_f_gender` | 无性别标记且角色未登记进 `characters[]` |
+| `NAME_UNKNOWN` | `_f_fabricated` | 带身份头衔却不在正史表 → 疑似编造人物 |
+| `RAGGED_NO_PLAIN` | `_f_ragged_needs_plain` | 衣物写破损但无 `PLAIN unadorned` → 出字风险 |
+| `NO_TEXT_MISSING` | `_f_no_text_missing` | visual 没写零文字声明（代码层已兜底） |
+| `PUNCH_EMPTY` / `PUNCH_LONG` | `_f_punchline` | 「定格瞬间」金句为空 / 超 22 字 |
+| `QUOTE_EMPTY` / `QUOTE_LONG` | `_f_dialogue` | 文言引句为空 / 超 50 字 |
+
+⚠️ **v0.3.18 踩过的坑**：`_SEVEN_ELEMENT_LABELS` 漏了新增的 `CONCEPT:` 段，
+被 `_ACTOR_LINE_RE` 当成角色段 → `GENDER_PARTIAL` **永久误报阻塞**，整条管线卡死。
+新增七要素段名时，**必须同步 `_SEVEN_ELEMENT_LABELS` 和 preflight 黑名单**。
 
 逃生阀：`step_gen_images(job_id, skip_preflight=True)`（用户确认要硬跑时才用）。
 
@@ -482,33 +712,104 @@ python scripts/run.py publish --job-id kc_xxx
 - 第一次跑前提示用户加公网 IP 到 mp.weixin.qq.com → IP 白名单（errcode 40164）
 - `requests.post` 必须 `ensure_ascii=False`，否则中文变 `\uXXXX` 字面量
 
+### 8. 文风铁律（v0.3.18 定版 · 文字内容的硬约束）
+
+> 这一节是 Mavis 审阅 layout_preview 时**必查**的。完整版 + 改写对照表见
+> `references/style_guide.md` §2.5。
+
+**8.1 术语翻译（看不懂的唯一根因）**
+
+- 任何术语首次出现，必须 `术语（大白话解释）` 或 `术语，意思就是……`
+- **一页最多 1 个术语**需要解释 —— 密度上限 = 1
+- 解释用**读者生活里的类比**，不是同义替换
+- 专有名词免解释：人名 / 地名 / 朝代 / 事件名 / 官职
+- 禁用裸术语：上兵 / 伐谋 / 伐交 / 庙算 / 奇正 / 势 / 全胜 / 釜底抽薪 / 合纵连横 / 欲擒故纵 / 以全争于天下 / 兵家极意 / 存乎一心 …
+
+**8.2 正文三拍结构（100-150 字）**
+
+| 拍 | 字数 | 职责 |
+|---|---|---|
+| 讲事 | 40-50 字 | 这一页发生了什么（时间/地点/人物/动作） |
+| **说破** | **40-60 字** | 把"**为什么**"用人话说出来 —— **最容易丢、最关键** |
+| 落点 | 20-30 字 | 一句判断，**不重复画面** |
+
+**8.3 白话 / 文言严格分层（三者不可混用）**
+
+| 字段 | 语体 | 位置 |
+|---|---|---|
+| `body` | **现代白话（信达雅）** | 图下正文 |
+| `dialogue` | **文言原文，逐字出原著** | 叠在图片下缘蒙版 |
+| `punchline` | **白话金句** 10-22 字 | 「定格瞬间」卡 |
+
+**8.4 分寸禁写**
+
+- ❌ hedging：「（或…）」「（实际为…）」「（一说…）」 → preflight **阻塞**
+- ❌ 现代口水词：极限测试 / 活体武器 / 情绪价值 / 内卷 / 破防 / 降维打击 → warn
+- ❌ 复述画面已表达的内容 —— 图为主、文字为脚注
+- ❌ 元叙事：「远川研究所式的视角告诉我们」—— 直接写内容，不点名引用源
+- ❌ 说教：「总而言之 / 综上所述 / 我们应该…」
+
+**8.5 排版（v0.3.8 定版）**
+
+正文**一句一段、无首行缩进**，段边界由段间距标明。
+排版层自动实现（`article._split_paragraphs()`，引号感知切分），Mavis 不需要手动干预。
+
 ## 文件结构
 
 ```
 knowledge-comic/
-├── SKILL.md                  ← 你正在读的（v0.3.8）
+├── SKILL.md                  ← 你正在读的（v0.3.24）
 ├── references/
 │   ├── handraw_styles.md     ← 5 个锁定风格完整定义 + 推荐矩阵
-│   ├── templates.md          ← 3 个排版模板详情 + 配色对照
+│   ├── templates.md          ← 3 个排版模板详情 + v0.3.8 排版铁律
 │   ├── user-review.md        ← Mavis 对话流 + 分镜意图 vs 实际画面对照表模板
 │   ├── workflow.md           ← 端到端流程图 + 调试指南
-│   └── style_guide.md        ← 文章内容评分维度（深度/一致性/作者风格 100 分制）
+│   └── style_guide.md        ← 作者风格 + **文风铁律 §2.5**（术语翻译 / 三拍结构 / 白话文言分层）
 ├── scripts/
-│   ├── run.py                ← 主入口：4 个 step_* API + CLI 兼容
-│   ├── canon.py              ← 一致性检查工具（术语/数字/视觉锚点）
+│   ├── run.py                ← 主入口：step_* API + CLI 兼容
+│   ├── run_tests.py          ← **v0.3.24** 一次跑完全部测试（唯一入口，见下）
+│   ├── check_drift.py        ← **v0.3.24** 真源 ↔ dev 镜像一致性校验（--sync 可同步）
+│   ├── canon.py              ← 一致性约束注入（v0.3.24 起已接入 run.py）
 │   ├── check_alignment.py    ← 视觉文字对齐审查（step_gen_images 自动跑）
 │   ├── image_review.py       ← 图片 rerender 标记工具
 │   ├── publish_existing.py   ← 重发草稿（图片复用）
-│   ├── tests/                ← 正式测试（v0.3.2 新增，全部不烧 API 额度）
-│   │   ├── test_smoke_v029.py      ← v0.2.9 默认值 + keywords 字段
-│   │   ├── test_gender_v030.py     ← v0.3.0 性别分支 8 项
-│   │   └── test_regression_v032.py ← v0.3.2 修复回归 22 项
-│   └── core/                 ← 核心模块（planner/image_gen/article/publisher/prompts/config）
-├── _archive/                 ← 一次性调试脚本归档（不进版本库）
+│   ├── tests/                ← 正式测试（全部不烧 API 额度；用 run_tests.py 跑）
+│   │   ├── test_smoke_v029.py         ← v0.2.9 默认值 + keywords 字段
+│   │   ├── test_gender_v030.py        ← v0.3.0 性别分支 8 项
+│   │   ├── test_regression_v032.py    ← v0.3.2 修复回归 22 项
+│   │   ├── test_preflight_v0315.py    ← v0.3.15 preflight 93 项
+│   │   ├── test_visual_qa_v0315.py     ← v0.3.15 visual_qa 41 项
+│   │   ├── test_v0322.py              ← v0.3.22 四项不可降级约束
+│   │   ├── test_prompt_v0324.py       ← **v0.3.24** prompt 瘦身 + JSON 示例合法性
+│   │   ├── test_thresholds_v0324.py   ← **v0.3.24** 检查层阈值不漂移
+│   │   └── test_live_smoke.py         ← 真 LLM 冒烟（默认 skip，`--live` 才跑）
+│   └── core/                 ← 核心模块（planner/image_gen/article/publisher/prompts/config/
+│                               preflight/visual_qa/review_page/story_script/thresholds）
+├── _archive/                 ← 一次性调试脚本归档（v0.3.24 起 diagnose_*.py 也在此）
 ├── data/                     ← 生成的图 + 中间产物（git ignore）
+│   └── canon.md              ← 一致性约束（v0.3.24 起为**空模板**，不注入任何内容）
 ├── .env.example
 └── README.md
 ```
+
+## v0.3.24 三条自检命令（改完必跑）
+
+```bash
+# 1) 全量测试（8 个文件一条命令；原来 pytest 会 INTERNALERROR 退出码 3）
+python scripts/run_tests.py
+
+# 2) 真源 ↔ dev 镜像一致性（改完 core/*.py 后跑；有漂移退出码 1）
+python scripts/check_drift.py
+python scripts/check_drift.py --sync    # 同步到 D 盘镜像并复校
+
+# 3) Lint（v0.3.24 从 62 条清到 0；配置见 ruff.toml）
+ruff check scripts/
+```
+
+**为什么测试要用 `run_tests.py` 而不是 pytest**：`scripts/tests/test_*.py` 是 standalone
+脚本（顶层 `assert` + 结尾 `sys.exit(0)`），pytest 收集时撞上 `SystemExit` 会
+INTERNALERROR 整个 session 崩掉。`run_tests.py` 用子进程逐个跑并汇总，
+不改动已验证的断言。
 
 ## 关键 pitfall
 
@@ -625,6 +926,13 @@ knowledge-comic/
 
 ## 变更记录
 
+- **0.3.24**（2026-10-08）：可观察性 + 结构性瘦身。① **【阻塞级】** planner prompt 里的"严格 JSON"示例本身非法（`{"enum": [...]}` 教 LLM 输出嵌套对象 → `CHAR_GENDER_MISSING` 阻塞 → 一张图不跑；`characters` 是两段对象拼接；`sources` 未转义引号），且 v0.3.22 的测试把这个 bug 锁成了规范，已一并改写；② 跑图接 `progress_cb`（`image_gen` 早有该形参，`run.py` 两处都没传，3-6 分钟零输出），角色参考图同步补齐；③ 新增 `run_tests.py`（`pytest scripts/tests` 是 INTERNALERROR rc=3，7 个 standalone 脚本只能手敲），现 7/7 约 8s；④ 新增 `core/thresholds.py` 单一真源，收敛 6 处已实证漂移（body 150 warn vs error、keywords<3 preflight 漏检、punchline 实按 30 但文案写 22…），修 `review_page` 的陈旧语义并补 `KW_TOO_FEW`；⑤ system prompt 22,064 → 14,578（历史）/ 13,297（非历史），删版本考古 + 事故复盘 + 6 处重复的"角色一致性"，朝代速查表改按风格条件注入（`build_system_prompt`）；⑥ canon 约束在主流程一直是死的（只有 `run_plain.py` 调），接线前先把黑死病专属数据的 `data/canon.md` 存为 `canon.blackdeath.md`、主文件换空模板（注入实测 0）；⑦ 新增 `check_drift.py` 自动化真源↔镜像校验（实测镜像已漂移 6 处、缺 v0.3.18 修复）；⑧ 卫生：v0.3.23 补提交、SKILL.md 版本号对齐、`diagnose_*.py` 归 `_archive/`、根目录 9 个临时文件清理
+- **0.3.23**（2026-09-30）：两个可移植性 bug —— ① Windows GBK 崩溃：报告标记 🔴/🟡 改纯文本 `[阻塞]`/`[建议]` + `run.py` 加 `_safe_stdout()` 安全网（**只在阻塞分支触发，体检通过时不崩，所以极易漏测**；Mavis 里因宿主重定向 stdout 测不出来）；② `玉璧` 假阳性：从 `ANACHRONIC_MARKERS` 移除（玉璧是春秋战国正统礼器，蔺相如完璧归赵即战国故事），原事故真正穿帮的是「金质发冠 + 繁复华丽丝绸」；③ 附带修 `test_preflight_v0315.py:271` 编码损坏字符（GBK 下 print 抛异常 → 逻辑全过但 rc=1）
+- **0.3.22**（2026-09-29）：性别锚点工程化收尾 —— JSON schema `gender` 改 `enum:["male","female"]`；`KNOWN_GENDER` 兜底表**停止兜底**（`CHAR_GENDER_MISSING` 转阻塞，planner 必须自己填）；MUST-SHOW fallback 复用 `_assemble` 不再 `assembled[:9790]` 硬切（否则砍掉 ZERO_TEXT_BOOST）；连环画强锚不再锚现代室内物；`preflight` / `visual_qa` 落盘 JSON 报告（`data/<job>/preflight_report.json` / `visual_qa_report.json`）
+- **0.3.21**（2026-09-30）：prompt 拼装唯一化 —— 原先主路径和超限截断路径有**两份几乎相同的拼装代码**，改一处漏另一处；统一为 `_assemble()`
+- **0.3.20**（2026-09-29）：性别解析收敛为单一真源 `resolve_gender()`，page 级和 char 级都走它；原默认 `female` 改掉（男性主题被默认成女性）；preflight 修两个真实缺陷
+- **0.3.19**（2026-09-29）：角色签名指纹 —— `visual_signature` 变了必须重画 4 视图参考图，不复用旧的
+- **0.3.18**（2026-09-30）：图文关联专项 —— planner 加「术语翻译成人话」铁律 + 正文三拍结构（讲事/说破/落点）+ `CONCEPT:` 段（画概念不画场景）；`prompts.py` 把 MUST-SHOW 块提到最终 prompt **第 6 字符**（原第 4703/9700 ≈ 48%，模型高权重区拿不到概念）；`check_alignment` 加 `check_concept()`；模板 c 段数上限 `max_paras=3` + 均衡合并（`max_len` 只管单句超长，4 个 20-50 字短句会原样切 4 段）+ 去掉史料脚注逐字插空格（`" ".join(src)` 把《孙子兵法》渲染成《 孙 子 兵 法 》，无法检索/复制）；`preflight` 黑名单补 `concept`/`headwear`/`negative`/`avoid`/`wardrobe`（v0.3.17 建的 `_SEVEN_ELEMENT_LABELS` 漏了 v0.3.18 新增的 `CONCEPT:`，被 `_ACTOR_LINE_RE` 当成角色段 → GENDER_PARTIAL 永久误报阻塞）。负面提示词在本管线基本无效：顽固偏差（明代乌纱帽、斗笠）要**改正面描述 + 塞进 CONCEPT 段**才压得住。概念页/大场面页必须 `auto_char_refs=False`，i2i 角色参考图会压制 CONCEPT 里的场景
 - **0.3.17**（2026-09-29）：朝代服饰考据铁律 — `characters[].era` 必填 / `CN_DYNASTY_COSTUME_GUIDE` 进 planner prompt（春秋/秦汉/魏晋/隋唐/宋元/明清 6 段）/ 新铁律 7.4 / 同步 dev 源。根因：卧薪尝胆勾践被写"圆领袍+武冠+幞头"三朝错配
 - **0.3.8**（2026-09-28）：排版结构化定版 —— 正文一句一段（最长块 124→33 字）/ 去首行缩进 / 修引号被劈开 / 定格瞬间不再与正文重复。规范写入 references/templates.md，作为历史经典故事类默认
 - **0.3.7**（2026-09-28）：分镜速记全中文 + 取消截断 + 兼容 LLM 两种七要素写法（60 条要素 98% 中文）

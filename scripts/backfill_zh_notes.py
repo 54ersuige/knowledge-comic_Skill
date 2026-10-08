@@ -24,12 +24,12 @@ from pathlib import Path
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SKILL_ROOT))
 
-from scripts.core.story_script import SEG_ORDER, _SEG_PATTERNS, _seg  # noqa: E402
+from scripts.core.story_script import _seg  # noqa: E402
 
 # 复用 story_script 的切分逻辑 —— 两处逻辑必须一致，
 # 否则抽取和注入会对不上（v0.3.7 踩过：backfill 用自己的正则切，
 # story_script 用另一套，导致 // 插错位置、整段被吞）。
-from scripts.core.story_script import _ANY_LABEL, _norm_key, _seg, _split_segments  # noqa: E402
+from scripts.core.story_script import _split_segments  # noqa: E402
 
 _ORDER = ("subject", "action", "secondary", "background", "camera", "mood")
 

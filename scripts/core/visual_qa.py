@@ -134,10 +134,10 @@ class VisualQAResult:
             return head + ("，有页面未能审核）\n" if self.skipped else "）\n")
         lines = [f"共审核 {self.checked} 页"]
         if self.blocks:
-            lines.append(f"🔴 高置信问题 {len(self.blocks)} 个 —— 建议重画")
+            lines.append(f"[阻塞] 高置信问题 {len(self.blocks)} 个 —— 建议重画")
             lines += [f"   {f.report_line()}" for f in self.blocks]
         if self.warns:
-            lines.append(f"🟡 待人工确认 {len(self.warns)} 个")
+            lines.append(f"[建议] 待人工确认 {len(self.warns)} 个")
             lines += [f"   {f.report_line()}" for f in self.warns]
         if self.error:
             lines.append(f"⚠️ {self.error}")

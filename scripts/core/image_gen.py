@@ -280,6 +280,7 @@ def generate_character_references(
     style_id: str,
     job_id: str,
     n_views: int = 4,
+    progress_cb=None,
 ) -> dict[str, list[Path]]:
     """为每个角色生成多视图参考图。
 
@@ -291,6 +292,9 @@ def generate_character_references(
         style_id: 风格 ID
         job_id: 任务 ID
         n_views: 每个角色生成几张参考图（1-4, 默认 4）
+        progress_cb: v0.3.24 进度回调 done/total/label。
+            角色参考图是跑图最慢的一段（2 角色 × 4 视图 = 8 张），
+            没有它用户只能对着静默等待 —— 与页面图同一类可观察性缺口。
 
     Returns:
         {character_name: [Path, ...]} 每角色多张参考图路径
@@ -307,6 +311,17 @@ def generate_character_references(
 
     views = CHARACTER_REF_VIEWS[: max(1, min(n_views, 4))]
     result: dict[str, list[Path]] = {}
+
+    # v0.3.24: 跨角色 + 跨视图的全局进度（缓存命中也算一步，
+    # 否则命中多时进度条会"卡住不动"，反而更像挂死）。
+    _ref_total = len(characters) * len(views)
+    _ref_done = 0
+
+    def _ref_tick(label: str) -> None:
+        nonlocal _ref_done
+        _ref_done += 1
+        if progress_cb:
+            progress_cb(_ref_done, _ref_total, label)
 
     for char in characters:
         name = char.get("name") or char.get("id") or "character"
@@ -335,6 +350,7 @@ def generate_character_references(
                 # 缓存命中: 签名没变，跳过
                 logger.info("[job=%s] cache hit %s", job_id, out.name)
                 char_paths.append(out)
+                _ref_tick(f"{name} {view}")
                 continue
             prompt = _build_character_view_prompt(
                 name, role, sig, view, style_id,
@@ -345,6 +361,7 @@ def generate_character_references(
                 char_paths.append(out)
             else:
                 logger.warning("[job=%s] char ref failed: %s view %s", job_id, name, view)
+            _ref_tick(f"{name} {view}")
 
         # v0.3.19: 4 个视图都成功后写指纹，下次比对用。
         # 只在有图时才写 —— 全失败时不写，下次会自动重试。

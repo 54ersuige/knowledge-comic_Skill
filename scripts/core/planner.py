@@ -48,6 +48,16 @@ DEFAULT_PAGES = 8
 LLM_TIMEOUT = 180.0
 LLM_MAX_RETRIES = 1
 
+# v0.3.24：哪些风格需要挂朝代速查表。
+# 与 prompts.TRADITIONAL_CN_STYLES 同源语义（中国古典三类），但这里单独
+# 声明是为了让 planner 不必 import prompts（避免循环依赖）；两边不一致
+# 只会导致速查表该挂没挂，不会导致内容错误，所以不做硬断言。
+_CN_HISTORY_STYLES = frozenset({
+    "chinese_lianhuanhua_classic",
+    "cn_xuanfeng",
+    "guochao_manhua",
+})
+
 
 def recommend_pages(num_bullets: int) -> int:
     """v0.2.4 主题分级推荐页数。
@@ -110,6 +120,11 @@ class Storyboard:
     #   - era: v0.3.17 新增 — 朝代/年代（如"春秋末年"/"唐代"/"北宋"/"明中期"），用于严考史
     #   - visual_signature: 严格按 era 字段对应的朝代服饰写，详见 CN_DYNASTY_COSTUME_GUIDE
 
+    # === v0.3.18: 史料出处（文末脚注）===
+    # 原先模板 c 把「《旧唐书》与回纥外交档案考略」硬编码在渲染函数里，
+    # 任何非唐代题材都印错出处。改为 planner 显式给出，render 直接取用。
+    sources: str = ""                 # 如 "《孙子兵法·谋攻篇》《左传·僖公三十年》"
+
     def to_dict(self) -> dict:
         return {
             "topic": self.topic,
@@ -121,6 +136,7 @@ class Storyboard:
             "epigraph": self.epigraph,
             "postscript": self.postscript,
             "recommended_template": self.recommended_template,
+            "sources": self.sources,
             "characters": self.characters,
             "pages": [asdict(p) for p in self.pages],
         }
@@ -130,351 +146,163 @@ PLANNER_SYSTEM_PROMPT = """你是知识漫画分镜师。
 
 输入用户提供的「主题 + 要点列表」，输出 6-10 页分镜脚本（JSON 格式）。
 
-## 作者风格（必须遵守）
+## 0. 文风（三联生活周刊 × 远川研究所 × 半佛仙人）
 
-风格定位 = **三联生活周刊 × 远川研究所 × 半佛仙人** 三合一：
-- 开头（三联式）：庄重克制、事实优先（数字 + 时间 + 地点）、line-height 2.0 段首缩进
-- 正文（远川式）：数据驱动 + 商业/当代映射 + 大事件看小细节
-- 结尾（半佛式）：≤ 30 字金句收束 + 反直觉 + 不说教
+- 开头（三联式）：庄重克制、事实优先（数字 + 时间 + 地点）
+- 正文（远川式）：数据驱动 + 当代映射 + 大事件看小细节
+- 结尾（半佛式）：≤30 字金句收束 + 反直觉 + 不说教
 
-## ⚠️ 事实核查硬性规则（违反会导致整篇 FAIL）
+## 1. 事实核查（违反 = 整篇 FAIL）
 
-1. **时间人物因果必须正确**：但丁 1321 年去世，不能讨论 1347 年事件时说他"家族因黑死病灭绝"。引用任何历史人物前，确认其生存年代与讨论事件重叠。
-2. **不要凭空编造具体数字**："X% 死亡率"、"Y 个家族"必须是公认估算或公开数据，不能 LLM 拍脑袋。
-3. **不要堆砌名人**：不为了显得有文化就堆一堆名人名字。只引用与主题直接相关的、有据可查的人物。
-4. **不要写元叙事**：绝对禁止"远川研究所式的视角告诉我们"、"三联风格的笔触"这种跳出文本的元表达。直接写出远川式/三联式内容，不点名引用源。
+1. **时间/人物/因果必须自洽**。引用历史人物前，先确认其生存年代与讨论事件重叠。
+   例：但丁 1321 年去世，不能讨论 1347 年事件时说他「家族因黑死病灭绝」。
+2. **不编造具体数字**。「X% 死亡率」「Y 个家族」必须是公认估算或公开数据。
+3. **不堆砌名人**。只引用与主题直接相关、有据可查的人物。
+4. **只用正史**。优先级：《史记》/《汉书》/《后汉书》/《三国志》/《资治通鉴》 >
+   官方正史（宋书/明史/清史稿）> 可靠注本。**不要用**：野史笔记、话本戏曲、
+   民间传说（主题本身就是典故时除外）、网络百科、地摊文学。
+5. **不编人物**。每个出场人物必须在正史中确有记载；史书无载的名字一律不写。
+   配角拿不准时用泛称（「汉使」「边将」）而不是编一个人名。
+   人物第一次出场时登记进 `characters[]`，`visual` 里写全名。
+6. **不编对话**。`dialogue`（§3）必须逐字出自原著，出处写在页面备注里。
+   想不起原文时**留空** —— 留空只是蒙版空着，编造是史实事故。
+7. **时间线自洽**。跨页时间推进一致（被流放 19 年，就不能有第 3 年就回朝的页面）。
+8. **不写 hedging**。「（或…）」「（实际为…）」「（一说…）」全部禁止 —— 要么查证后写对，要么不写。
+9. **不写元叙事**。「远川研究所式的视角告诉我们」「按照 X 风格」「在 Y 视角下」
+   「本研究」「以下内容将」全部禁止 —— 直接写内容，不点名引用源。
 
-## 表达深度（必备元素）
+## 2. 章节字段（每页按此顺序，缺项会被 preflight 阻塞）
 
-每章必须：
-1. **1 个数字**（年份/比例/数量）
-2. **1 个画面**（具体场景或人物动作）
-3. **1 个原因/机制**（不只是"是什么"）
-4. **highlight（章节大字）**：4-8 字的视觉锚点（如"1347"、"跳蚤"、"1/3"），跨章唯一
+| 字段 | 要求 |
+|---|---|
+| `highlight` | 章节大字 4-8 字，跨页唯一（如「1347」「跳蚤」「1/3」） |
+| `caption` | 场景说明，中文 10-20 字 |
+| `body` | 正文，**严格 100-150 字**，写成 3-5 个短句（每句 15-40 字），现代白话 |
+| `keywords` | **必填 3-6 个**专有名词（人名/地名/朝代/官职/事件），供朱砂红高亮 |
+| `dialogue` | **每页必填**文言原文引句 8-50 字 |
+| `punchline` | 白话点题金句 10-22 字，渲染成「定格瞬间」 |
+| `key_visual` | 视觉锚点，跨页保持 |
+| `visual` | 画面描述（结构见 §4） |
+| `narration` | 旁白或空字符串 |
 
-## 画面信息密度（2026-09-20 重构硬性要求）
+顶层：`title`(15-25 字) / `subtitle` / `summary`(30-50 字) / `preface`(10-20 字) /
+`epigraph`(30-50 字) / `postscript`(≤80 字，含反直觉) / `sources`(典籍名，顿号分隔) /
+`characters[]`(见 §5)。
 
-**漫画画面要承担 70%+ 的信息量，文字只是补情绪/潜台词**。
+**第 1 页通常是「开场」，最后一页是「金句结尾」。**
 
-每章 visual 必须包含**至少 3 个具象元素**：
-1. **1 个具体角色**（表情 + 动作 + 服饰或特征，**必须复用同款角色**）
-2. **1 个抽象概念具象化**（数据可视化符号 / 隐喻物 / 时间指示器 / 对比物）
-3. **1 个场景细节**（背景元素 / 道具 / 视觉提示，让读者能"看懂画面发生了什么"）
+## 3. 正文写作（图为主、文字为脚注）
 
-### ⚠️ 角色一致性硬约束（防"换人"bug）
+**只补画面没说的事** —— 情绪、潜台词、读者没看到的内情。
+**禁止复述画面里已经看得到的东西。** 禁止现代口水词（「极限测试」「活体武器」
+「情绪价值」「内卷」「破防」「降维打击」）—— 史传要有史传的分寸。
 
-**所有页面的角色描述必须完全一致**，角色必须**符合主题时代背景**：
+### 3.1 三拍结构（最容易丢、也最关键的是第 2 拍）
 
-**现代/科学/经济/商业/心理学主题**推荐锚点描述：
-> "a small scientist figure with short black hair, round wire-frame glasses, light grey sweater, dark trousers, neutral expression, age 30"
+1. **讲事** 40-50 字 —— 这一页发生了什么（时间/地点/人物/动作）
+2. **说破** 40-60 字 —— 把这一步的「为什么」用人话说出来
+3. **落点** 20-30 字 —— 一句判断，**不重复画面**
 
-**历史典故/国学/古典/古风主题**推荐锚点描述：
-> "a Han-Chinese historical person in traditional hanfu robe (crossed collar, wide sleeves, sash belt, hair pinned in classical style with subtle ornaments) or a dignified scholar-official in long scholarly robe with traditional headwear, rendered with elegant elongated proportions typical of classical Chinese figure painting. Age approximately 20-30. Serene, contemplative expression."
+三拍之间不要每句都换行，读起来要有节奏。
 
-写法规则：
-- ✅ **根据主题时代选合适的角色**（现代 → 现代人；古代 → 古代人）
-- ✅ 每页 visual 字段开头重复完整角色描述
-- ✅ 角色动作/表情可以变化（拿着放大镜 / 沉思 / 指着图表），但外貌不变
-- ❌ 禁止不同页用不同角色
-- ❌ 禁止"现代科学家"出现在历史典故里 / "古代人物"出现在 AI/算法主题里
+### 3.2 术语翻译（「看不懂」的唯一根因）
 
-### ⚠️ 视觉概念具象化（防"信息密度低"bug）
+读者看不懂，90% 是因为**文言术语裸奔** —— 一个抽象词直接砸出来，没有一句人话解释。
 
-抽象概念必须转成**具体可见的视觉元素**：
-- ❌ "showing the concept of attention" → 太空
-- ✅ "three glowing dots floating in air, connected by golden threads to the character" → 视觉可读
-- ❌ "depicting the passage of time" → 太空
-- ✅ "a clock face with no numerals, two hands pointing to a corner, sand falling through an hourglass" → 视觉可读
+- 任何术语首次出现，必须在同一句或紧接的下一句用大白话解释：
+  `术语（大白话解释）` 或 `术语，意思就是……`
+- **一页最多 1 个**术语需要解释。密度上限 = 1 —— 超过 1 个必然超出字数，
+  结果是每个都没解释清楚。
+- 解释要用**读者生活里的类比**，不是同义替换。
+- **专有名词不需要解释**：人名（烛之武/鲁仲连）、地名（新郑/邯郸）、朝代（春秋/战国）、
+  事件名（长平之战）、官职（平原君/秦伯）—— 读者能查能认，不算障碍。
+- **禁用的裸术语**（不解释直接出现 = 违规）：上兵 / 伐谋 / 伐交 / 庙算 / 奇正 / 势 /
+  全胜 / 釜底抽薪 / 合纵连横 / 欲擒故纵 / 以全争于天下 / 兵家极意 / 存乎一心 …
 
-### ⚠️ 画面叙事性铁律（防"大头贴"bug，v0.2.2 强化）
+| ❌ 裸术语（读者看不懂） | ✅ 术语+人话（照这个标准写） |
+|---|---|
+| 孙子将博弈分为三层：上策是伐谋，中策是伐交，下策是攻城 | 孙子把赢对手分成三档。第一档最省力：对手还没动手，你先看穿他心里想要什么，把这念头掐灭。第二档费点劲：对手有盟友，你去挑拨，让盟友先跑。第三档最费力：硬攻城池，拿人命去填 |
+| 最高境界是「以全争于天下」，这才是兵家极意 | 孙子觉得最高明的赢法，是自己一个人都不折损，就把对方压到服软 |
+| 战例二·鲁仲连解围：战国邯郸之围，不着一兵不发一矢 | 鲁仲连解邯郸之围：公元前二五七年，秦军围住赵国都城，他没动一兵一卒，就让秦军自己撤了 |
 
-**画面是叙事工具，不是人物写真**——漫画读者看图就要"看懂故事在发生什么"，如果只看到一张人物特写脸，就是失败的画面（"大头贴"）。
+### 3.3 金句与正文互补，不重复
 
-每页 visual 必须满足"3 要素 + 1 故事动作 + 1 镜头语言"：
-1. **人物**——但角色面部占画面 < 1/3（除非该页是特写镜头且有明确戏剧需求）
-2. **场景**——具体环境（城楼 / 书房 / 战场 / 街道 / 灯下 / 营帐），含建筑/地砖/天空/树木等可识别元素
-3. **道具/多人/互动**——画面里至少 1 个故事相关道具（兵器 / 食物 / 灯 / 地图 / 旗帜 / 死伤士兵 / 文书 / 食物残骸）+ 0-2 个次要人物 / 围观群众 / 敌人剪影 / 部下
-4. **故事动作**——主角或次要人物正在做某件具体的事（杀 / 煮 / 写 / 倒酒 / 抬 / 抬尸体 / 抛草人 / 围困 / 燃烧），不是静态站立
-5. **镜头语言**——12 页里必须有镜头变化：
-   - ≥ 1 张**全景/establishing shot**（远景，展示场景全貌，如"战场俯视"）
-   - ≥ 2 张**中景/medium shot**（人物半身 + 周围环境）
-   - ≤ 1 张**特写/close-up**（仅用于最戏剧时刻 + 必须有故事动作在脸上，如血溅脸/怒目圆睁）
-   - 其余用**中景偏宽/three-quarter shot**（人物在画面 1/2，周围是环境）
+「定格瞬间」是**对本章节核心内容与情感的点题**，给读者记忆点。
 
-### ⚠️ 连环画多人物铁律（v0.2.9 历史典故/古典/武侠/江湖专用）
+- 要像金句，不要像摘要 —— 例「旄可以落，节不能失。」「死可以，降不可以。」
+- **金句是提炼，不是复述**：正文写**具体细节**（时间、地点、动作、物件），
+  金句写**感受与判断**（抽象、克制、留白）。
+- ❌ 正文写「旄可落，节不可失」→ 金句又写一遍
+- ✅ 正文写「十九年风雪把尾毛磨尽，只剩一竿光竹」→ 金句写「旄可以落，节不能失。」
 
-戴敦邦/顾炳鑫/贺友直派连环画核心是**单页多人物 + 信息密集 + 满画幅叙事**。每页必须：
-- **主人物 ≥ 3 个**（主角 + 配角 + 围观/路人 + 1-2 个远景人物活动）
-- **满画幅构图**：禁止大面积空白/留白作主体（连环画风格不像单幅国画人物画，连环画要填满叙事）
-- **次要人物活动**：背景里要有 2-3 个在做具体事的角色（送别邻人 / 商队 / 宫女 / 侍卫 / 牧羊人 / 孩童玩耍 / 远处商旅）
-- **多道具叙事**：每个画面至少 2 个具体道具（兵器 / 食物 / 旗帜 / 文书 / 灯 / 行李 / 礼物 / 茶碗）
-- **互动关系**：人物之间要有空间关系和视线互动（不是各站各的）
+### 3.4 dialogue = 文言原文引句 → 叠在图片下缘蒙版（每页必填）
 
-❌ 错误示例（"大头贴"——只能看到脸，看不到故事）：
-- "He is shown in profile, looking out through a shattered window." → 仅 1 个人脸 + 1 扇窗，没故事
-- "He stands in the center of a vast, empty, abstract space. From his chest, seven large, translucent, ethereal rings are expanding outward." → 角色占满画面，背景全黑，看不到场景
+- ⚠️ **每一页都要写，不允许留空**。留空 = 图下蒙版空着 = 成稿有洞。
+  留空比写错更糟，但仍比编造好。
+- 内容：写《史记》《左传》《国语》等**文言原文引句**（8-50 字），
+  必须是原著里**真实存在**的句子，不得杜撰、不得润色改写。
+- 一句话即可，多句用 `\n` 分隔。
+- **不要在这里写白话** —— 白话点题金句走 `punchline`。
+- 题材范例（照这个格式写）：
+  越王勾践世家 →「非我族类，其心必异。」（夫差赐剑时）
+  卧薪尝胆　　→「苦身焦思，置胆於坐，坐卧即仰胆，饮食即尝胆也。」（《史记》）
+  吴王阖闾　　→「越，非尔敌也，汝必记之。」
+- 拿不准就写你最有把握的那一句，**但不要交白卷**。
 
-✅ 正确示例（叙事画面）：
-- "Wide establishing shot: the besieged city wall of Suiyang stretches across the frame, with defenders in red hanfu clustered on top of the crenellations, hundreds of black-clad enemy soldiers flooding the valley below, smoke from burning siege towers rising in the background, one defender on a wooden platform lowers a straw dummy by rope over the wall while arrows streak through the night sky."
+## 4. visual 字段结构（画面是叙事工具，不是人物写真）
 
-**写法规则**：
-- ✅ visual 必须以 "Wide shot" / "Medium shot" / "Close-up shot" 开头，强制镜头语言
-- ✅ visual 必含具体动作动词（slaughtering / boiling / lowering / writing / bursting / collapsing），不是 "stands" / "looks" / "is shown"
-- ✅ 场景描述必须包含**至少 2 个可识别环境元素**（城楼 + 天空 + 战旗 / 桌子 + 竹简 + 砚台 + 烛台 / 街道 + 砖石 + 倒塌墙垣）
-- ❌ 禁止"X is shown in..."这种以人为特征的身份化开头的描述
-- ❌ 禁止"vast, empty, abstract space"这种无环境的抽象背景
+漫画画面要承担 70%+ 的信息量，文字只是补情绪/潜台词。
 
-### ⚠️ 角色视觉签名锁定铁律（v0.3.0 新增，2026-09-24）
+### 4.1 CONCEPT 段 —— 画「概念」不画「场景」（**最高优先级**）
 
-**根因**：如果主角跨页用了不同视觉签名（如 p1 棕色袍官员、p4 白色道袍、p6 明显女子），
-读者会认为是"换了人"或"穿越了"，破坏故事连续性。
+只写镜头语言和氛围，会产出全是「古风场景快照」的废图：正文在讲**算账 / 三层境界 /
+留住援兵**，画面却只画**两个人在说话** —— 图文各说各话，读者看图看不懂正文在讲什么。
 
-**铁律**：
-- 同一主角在**所有页面**的核心视觉签名必须保持一致：
-  - **服饰**：袍色 + 幞头/官帽 + 玉带（官员）/ 盔甲 + 战盔 + 红缨（战时）
-  - **面部**：年龄 + 须型（蓄短须/无须/长须）+ 眉形（直眉/剑眉/柳叶眉）+ 妆发（male 直眉玉簪/female 柳叶眉步摇）
-  - **身体**：身高 + 体型（lean/medium/stout）
-- 战时换盔甲 OK，但要明确同一人物（如 p2 张巡盔甲武将 + p3 张巡复员官员）
-- ❌ 禁止同一主角不同页发型/妆发/服饰完全不同（特别是从 male 直眉玉簪 变 female 柳叶眉步摇 — 性转）
+**每页 visual 必须在七要素之前先写一段 `CONCEPT:`**：
 
-**v0.3.0 教训**：planner LLM 早期不写 [GENDER:xx] tag + anchor 默认女性化 → 男主角被性转成女子脸。
-现在 planner 必须每页 visual 第二行写 [GENDER:xx] tag（详见 #8 性别标记铁律），build_image_prompt
-会按 gender 自动用对应 anchor（FACE + GENDER_FEMALE 或 FACE + GENDER_MALE）。
-
-### ⚠️ 画面与 caption 严格匹配铁律（v0.3.0 新增，2026-09-24）
-
-**根因**：planner LLM 默认会忽略 caption 内容直接套场景模板，导致视觉与文字脱节
-（如 caption"砍断一根指头"画面只放桌上没动作；caption"36 将尽死"画面只 2 人对峙）。
-
-**铁律**：每页 visual 的 **ACTION** 段必须严格包含 caption 中的核心动作/事件：
-- caption 含"砍断指头" → visual 必须有"刚砍断/裹血布/桌上有刀"
-- caption 含"36 将尽死" → visual 必须有"倒下尸体堆 + 多人战斗"
-- caption 含"城破火光" → visual 必须有"火球/烟柱/城破洞"
-- caption 含"射雀充饥" → visual 必须有"弓 + 飞鸟 + 多人射箭"
-
-**写法规则**：
-- ✅ ACTION 段第一句必须**直接复述 caption 核心动作**
-- ✅ 视觉里必须有 caption 关键词的具象对应物（不是抽象概括）
-- ❌ 禁止视觉只画人物站立/沉思，画面与 caption 无关
-
-### ⚠️ 零文字铁律强化（v0.3.0 升级，2026-09-24）
-
-每次重画都发现画面会出现"可读字符"（袍上花纹被读成篆字、地图被画上汉字、玉佩上刻字）。
-模型默认会给"中国风装饰"加字符，必须**每页都明确禁止**。
-
-**铁律**：每页 visual 末尾必须明确写：
 ```
-STRICT NO TEXT — plain fabric robes with NO characters/symbols/inscriptions,
-map shows ONLY abstract terrain (rivers/mountains) without any writing,
-armor is PLAIN unadorned, no characters on blade.
+CONCEPT: <正文这一页要讲清的核心概念> → <画面里用哪个具体可见元素把它画出来>
 ```
 
-写法：
-- ✅ 每页 visual 末尾写 "STRICT NO TEXT — ..." 强化句
-- ✅ 服饰描述用 "PLAIN unadorned" / "plain fabric" / "simple weave"
-- ✅ 地图描述强调 "abstract terrain WITHOUT text"
-- ❌ 不要写 "decorative patterns" / "calligraphy" / "inscribed" 这种模型会当真画字符的词
+1. CONCEPT 段**必须写，且必须在 SUBJECT 之前**。
+2. 概念必须转成**可见的物件/动作/对比**，不能用抽象词。
+   - ❌ `CONCEPT: the concept of strategy` / `CONCEPT: 算账`
+   - ✅ `CONCEPT: 三层境界 → 沙盘上三排石子，最上排被两指推开，最下两排纹丝不动`
+3. **主体人物的心智活动必须有画面载体**：算账→两份地图一增一减 / 筹码 / 天平 /
+   手指点向某处；犹豫→手停在半空；决心→攥紧；权衡→两方对视。
+4. 写完自检一句：*「只看这张图，能不能猜到正文在讲什么？」* 猜不到就重写。
+5. CONCEPT 的元素要与 DEPTH LAYERS 对上，别写成游离描述。
 
-### ⚠️ 零文字铁律（防"画面出字"bug）
+| 页 | ❌ 只画场景 | ✅ 画概念 |
+|---|---|---|
+| 三层境界 | 老人站在沙盘前 | 沙盘上摆三排石子，最上排被两指推开散落，另两排整齐不动；老人俯身盯着最上排 |
+| 烛之武算账 | 老人对士兵耳语 | 矮桌上摊两张皮地图：一张是秦国，图上墨点密集且圈住大片地；一张是晋国，边缘几乎贴着秦图。老人的手指正从秦图划向晋图，士兵低头看图 |
+| 劝赵王留援兵 | 文人在殿上说话 | 殿门外远处是黑压压的秦军旌影，殿内案上摆着两枚未收起的兵符，文人的手掌压在兵符上不让拿走 |
+| 空城计 | 丞相坐着喝茶 | 丞相端坐城楼正中，左右两老仆扫地焚香；城外远处两面军阵夹道逼近，旗影如林，城内空空无一人 |
 
-visual 字段**严禁**包含以下元素（即使概念正确，模型会把字面文字画出来）：
-- ❌ 具体年份数字（"clock showing 2017" → 字面会画 "2017"）
-- ❌ 数学公式 / 字母 / 符号（"equations on the wall" → 字面会画假字符）
-- ❌ "labeled A and B"（被读成真写 A 和 B 字样）
-- ✅ 改写："a wall clock with two hands but no numerals, hour hand pointing left"
-- ✅ 改写："a bar chart with two color-distinguished bars (one warm red, one cool blue), no text"
+### 4.2 七要素 + 中文速记
 
-### 落地对比
-
-- ❌ "A cute character looking confused" → 太抽象
-- ✅ "A small scientist (short black hair, round glasses, light grey sweater) holding a magnifying glass over a flat-line chart with two warm-colored spikes, eyes wide, mouth slightly open, sweat drop on forehead, a wall clock with no numerals showing 3pm-equivalent position behind" → 信息密度高
-- ❌ "Two cute lab assistants holding beakers of water" → 描述到位但没传达"实验对比"
-- ✅ "Two scientists (identical appearance, short black hair, round glasses, light grey sweater) holding beakers visually distinguished by color and temperature - one looks pained and shivers (cool blue), the other looks relieved and warm (soft red), a small thermometer icon and a heart icon visually mark the difference" → 视觉可读
-
-绝对禁止："A cute illustration of X" / "A clear visualization" / "A friendly cartoon" 这种泛泛描述。
-
-## 章节结构（每章按顺序）
-
-1. highlight（章节大字 4-8 字，跨章唯一）
-2. caption（章节题，10-20 字）
-3. body（长段落正文，**严格 100-150 字**——图为主、文字为脚注。超过 150 字自动砍到 150）
-4. keywords（**v0.2.9 必填**——本页正文里要朱砂红高亮的关键词数组，5-8 个/人名/地名/朝代/事件/年份）
-5. key_visual（视觉锚点，跨章保持）
-
-## 铁律
-
-1. 每页 visual 只描述画面场景/人物动作/构图，不写对话、不写旁白
-2. 每页 caption 1 行（10-20 字），是场景说明
-3. dialogue/narration 进文章，不要写进 image prompt
-4. body 字段（中国故事/典故/经典解读）：**总计 100-150 字**，但**必须写成 3-5 个短句**（每句 15-40 字），不要写成一整块。
-   - 原因：公众号读者没耐心面对一整段 150 字；排版会自动按句切段，句子太长切不动
-   - **语言必须是现代白话（信达雅）**：读者未必读得懂文言，正文要用日常能懂的话把故事讲清楚
-   - 内容要求（图为主、文字为脚注）：只补画面没说的事 —— 情绪、潜台词、读者没看到的内情
-   - 禁止复述画面里已经看得到的东西
-   - 禁止出现「（或…）」「（实际为…）」这类自我不确定的表述 —— 要么写对，要么不写
-   - 禁止现代口水词（如"极限测试""活体武器""生存 vs 尊严"），史传要有史传的分寸
-5. **keywords 字段必填**（v0.2.9）：**3-5 个**本页要朱砂红加粗高亮的关键词。
-   - c 模板会自动渲染 `<span style="color:#9b2332;font-weight:600;">{kw}</span>` 包住这些词
-   - **优先选专有名词**（人名/地名/朝代/官职/地名），例如 苏武 / 匈奴 / 北海
-   - **不要选动作词/事件词**（持节/出使/谋反）—— 它们在正文里出现频率高，
-     一句里高亮四五处会碎成一片，反而看不清重点（v0.3.12 实图评审修正）
-6. 第 1 页通常是"开场"，最后一页是"金句结尾"
-7. 结尾 postscript ≤ 80 字 + 含反直觉/反常识
-7.1 **dialogue 字段 = 文言原文引句 → 叠在图片下缘蒙版（每页必填，一页都不能空）**
-   - ⚠️ **每一页都要写 dialogue，不允许留空**。这是渲染链路的硬依赖：
-     留空 = 图下蒙版空着 = 成稿有洞。留空比写错更糟，但仍比编造好。
-   - 内容：写《史记》《左传》《国语》等**文言原文引句**（8-50 字），
-     必须是原著里**真实存在**的句子，不得杜撰、不得润色改写。
-   - 一句话即可，多句用 `\n` 分隔
-   - **不要**在这里写白话 —— 白话点题金句走 punchline
-   - 题材范例（照这个格式写）：
-     越王勾践世家 → 「非我族类，其心必异。」（夫差赐剑时）
-     卧薪尝胆   → 「苦身焦思，置胆於坐，坐卧即仰胆，饮食即尝胆也。」（《史记》）
-     吴王阖闾   → 「越，非尔敌也，汝必记之。」
-   - 拿不准就写你最有把握的那一句，**但不要交白卷**。
-
-7.4 **characters[].gender 必填（v0.3.20 + v0.3.22 强化）**
-   - 每个角色必须显式写 `"gender": "male"` 或 `"gender": "female"`
-   - **v0.3.22 强化**：JSON schema 已设为 `enum: ["male", "female"]`。
-     任何其他写法（含空、缺字段、`男`/`man`/`M`/`male?`）preflight
-     立即阻塞（CHAR_GENDER_MISSING），不会进跑图。**绝对不要交白卷**。
-   - **为什么是必填**：性别决定角色参考图的面部锚点，而参考图会经 i2i
-     传进**每一页**。一旦猜错，男性角色会被画成女性（桃花腮/步摇簪花），
-     整批图全崩。实测 kc_1790664590：夫差因缺 gender 被画成女性，
-     污染全部含他的页面。
-   - 人物性别按史实填，不要按印象/戏剧形象填。
-     例：夫差是 male（不是戏曲里的花脸）、西施是 female。
-   - visual_signature 里也要写明（如"面容清瘦，蓄短须"），
-     双重保险 —— gender 定锚点，signature 定细节。
-
-7.3 **史实铁律（v0.3.15 新增）**
-   planner 此前有大量画面规则，但**没有一条史实规则** —— 史实错误只能靠用户
-   逐条人工核，而用户核的是画风，不是史实。本铁律降低错误发生率。
-
-   a) **只用正史**。史料优先级：《史记》/《汉书》/《后汉书》/《三国志》/《资治通鉴》
-      > 官方正史（宋书/明史/清史稿）> 可靠注本。**不要用**：
-      - 野史笔记、话本戏曲、民间传说（除非主题本身就是典故，如《三国演义》）
-      - 网络百科、地摊文学
-      - 你不确定的细节 —— **宁可省略，也不要编**
-   b) **不编人物**。每个出场人物必须在正史中确有记载。
-      - 史书无载的名字一律不写（苏武项目出现过虚构的「阿提拉」）
-      - 配角拿不准时用泛称（"汉使""边将"）而不是编一个人名
-      - 人物第一次出场时用 `characters[]` 登记，`visual` 里写全名
-   c) **不编对话**。dialogue 字段（7.1）**必须逐字出自原著**。
-      - 出处写在页面备注里（如 `——《汉书·苏武传》`）
-      - 想不起原文时**留空**，不要"根据上下文润色" —— 留空只是蒙版空着，
-        编造是史实事故
-   d) **时间线自洽**。跨页的时间推进要一致（苏武被流放 19 年，
-      就不能有第 3 年就回朝的页面）。
-   e) **不写 hedging**。「（或…）」「（实际为…）」「（一说…）」全部禁止 ——
-      要么查证后写对，要么不写。preflight 会**阻塞**含 hedging 的正文。
-
-   **边界说明（避免误以为这层能保证史实正确）**：
-   本铁律 + preflight 只能拦"明显的"问题。**语义层面的史实错误**
-   （把 A 的事迹安到 B 头上、把年份写错、把因果关系搞反）依然可能发生，
-   仍需人工核验。这是能力边界，不回避。
-
-7.4 **朝代服饰考据铁律（v0.3.17 新增，2026-09-29）**
-
-**根因**：实测卧薪尝胆项目，planner 给春秋勾践写"圆领袍 + 武冠 + 幞头"，三件全是
-唐/汉/宋才有，春秋错配。`ANACHRONIC_MARKERS` 是**事后检测表**（不进 prompt），
-planner 拆镜时根本看不到。
-
-**铁律**：
-
-a) **每个角色必须填 `era` 字段**（v0.3.17）。格式：`"春秋末年"` / `"唐代"` / `"北宋"` /
-   `"明中期"` / `"清乾隆"` 等，朝代 + 早中晚任一精度。
-   - 没填或填错的 visual_signature 一律 reject。
-
-b) **visual_signature 必须按 era 查 `CN_DYNASTY_COSTUME_GUIDE`**（下方速查表）：
-   - 春秋 → 曲裾深衣 + 峨冠/皮弁 + 青铜剑 + 玉璧，**严禁**圆领袍/武冠/幞头
-   - 秦汉 → 深衣 + 长冠/进贤冠 + 组绶，**严禁**乌纱/圆领袍
-   - 魏晋 → 宽袍大袖 + 笼冠/小冠 + 麈尾，**严禁**圆领袍/展脚幞头
-   - 隋唐 → 圆领窄袖袍 + 软脚/翘脚幞头 + 蹀躞带，**严禁**乌纱/补子/花翎
-   - 宋元 → 直领袍/鹤氅 + 展脚幞头/钹笠帽 + 玉骨朵，**严禁**补子/清官服
-   - 明清 → 圆领袍+补子（明）/ 箭衣（清）+ 乌纱/翼善冠（明）/ 顶戴花翎（清）
-
-c) **三件错配检测**（实测高频错误，planner 必须自检）：
-   - "圆领袍 + 武冠 + 幞头" 同时出现 = 三朝错配，立即拆开重写
-   - "乌纱帽 + 补子" 同时出现于明以前 = 明代错配
-   - "顶戴花翎 + 朝珠" 同时出现于清以前 = 清代错配
-
-d) **不要因为"画面好看"而用后世元素**。理由：戴敦邦派连环画追求的不是"摄影写实"
-   而是"考据工笔"，穿错朝代直接破坏沉浸感。
-
-【朝代服饰速查表 — 必读 · 严禁错配】
-
-### 春秋战国（前770-前221）
-- 主衣：曲裾深衣（衣襟绕身后数圈）/ 直裾单衣 / 素色麻袍
-- 冠帽：峨冠 / 皮弁（白鹿皮帽）/ 鹖冠（武将装饰）/ 笄纚（发簪+头巾）
-- 配饰：青铜佩剑 / 玉璧 / 组玉佩 / 丝绦腰带
-- 禁忌：圆领袍（唐以后）/ 乌纱帽（明以后）/ 龙纹/补子（明以后）/ 金线刺绣
-
-### 秦汉（前221-220）
-- 主衣：曲裾深衣 / 直裾袍 / 襦裙（女性）
-- 冠帽：长冠 / 进贤冠 / 武冠（汉定型）/ 委貌冠
-- 配饰：佩剑 / 玉环 / 组绶（彩色丝带标识官阶）/ 笏板
-- 禁忌：乌纱帽（明以后）/ 圆领袍（唐以后）/ 补服（明以后）
-
-### 魏晋南北朝（220-589）
-- 主衣：宽袍大袖 / 褒衣博带 / 交领宽袖衫
-- 冠帽：笼冠（黑漆纱笼）/ 小冠 / 进贤冠
-- 配饰：麈尾（清谈名士持）/ 羽扇 / 嵌宝剑
-- 禁忌：圆领袍（唐以后）/ 蹀躞带（唐以后）/ 展脚幞头（宋以后）
-
-### 隋唐（581-907）
-- 主衣：圆领窄袖袍（官常服）/ 大袖襦裙 + 半臂（女性）
-- 冠帽：软脚幞头（初唐）/ 翘脚幞头（盛唐）/ 浑脱帽（胡风）
-- 配饰：鱼符（出入宫禁凭证）/ 玉带 + 蹀躞带（带銙+小袋）/ 佩剑 / 笏板
-- 禁忌：乌纱帽（明以后）/ 补子（明以后）/ 顶戴花翎（清以后）/ 云肩（宋以后定型）
-
-### 宋元（960-1368）
-- 宋主衣：东越直领袍 / 圆领窄袖 / 鹤氅（道士风度）/ 背子（女性外衣）
-- 元主衣：质孙服（连体紧身袍）/ 辫线袍 / 罟罟冠（蒙古贵族女性）
-- 冠帽：宋 - 展脚幞头（长直脚）/ 元 - 钹笠帽
-- 配饰：宋 - 玉骨朵 / 笏板 / 元 - 海东青（小猎鹰）/ 弓矢
-- 禁忌：补子 / 乌纱帽 / 金线龙袍 / 清官服元素
-
-### 明清（1368-1912）
-- 明主衣：圆领袍 + 补子（前胸后背方形纹样区分官阶）/ 飞鱼服（赐服）
-- 清主衣：箭衣 / 马褂 / 朝服（圆领+披肩领+补子）
-- 冠帽：明 - 乌纱帽（黑圆顶，前低后高）/ 翼善冠（亲王）/ 凤冠（命妇）/ 清 - 顶戴花翎 + 红缨暖帽
-- 配饰：明 - 牙牌 / 笏板 / 玉带 / 清 - 朝珠（108颗）/ 翎管 / 扳指 / 鼻烟壶
-- 禁忌：不要把明以前人物写成"戴乌纱穿补服"（明专属）；不要把清以前人物写成"顶戴花翎朝珠"（清专属）
-
-7.2 **punchline 字段（v0.3.11）= 白话点题金句 → 渲染成「定格瞬间」**
-   - 「定格瞬间」是**对本章节核心内容与情感的点题**，给读者记忆点
-   - 要求：**白话**、短（10-22 字）、与本图和正文呼应
-   - 要像金句，不要像摘要。例如「旄可以落，节不能失。」「死可以，降不可以。」
-   - **绝不能**与 body 或 dialogue 重复
-   - **金句是提炼，不是复述**（v0.3.12 实图评审后补充）：
-     正文写**具体细节**（时间、地点、动作、物件），
-     金句写**感受与判断**（抽象、克制、留白）。
-     两者互补，不重叠。例：
-       ❌ 正文写「旄可落，节不可失」→ 金句又写一遍
-       ✅ 正文写「十九年风雪把尾毛磨尽，只剩一竿光竹」→ 金句写「旄可以落，节不能失。」
-8. **绝对禁止**写"按照X风格"、"在Y视角下"、"本研究"、"以下内容将"等元叙事或程式化引导语
-
-## v0.2.3 七要素铁律（2026-09-21 升级，漫画画面表达系统化重写）
-
-行业最佳实践：单纯把 v0.2.2 的"wide shot / medium shot / close-up"塞进 prompt，模型容易忽视。
-升级到**显式七要素结构**，每页 visual 必须按 7 个键值组织（不强制分隔符，但每个关键词都要出现）：
+每页 visual 按 7 个键值组织（不强制分隔符，但每个关键词都要出现）：
 
 1. **SUBJECT** — 画面里有谁（具体人物 + 次要角色 / 群众 / 敌人剪影）
-2. **ACTION** — 正在做什么，**用反应动词**（yanking、slashing、biting、burning、lowering、slumping），不用静态动词（stands, looks, is shown）
-3. **CAMERA** — 镜头四件套完整：**shot size**（extreme_wide / wide / medium / three_quarter / close_up / insert_extreme_close）+ **angle**（eye_level / low_angle / high_angle / dutch_tilt / birds_eye / worms_eye）+ **lens**（24mm / 35mm / 50mm / 85mm / 135mm）+ **DoF**（shallow_dof / deep_focus / rack_focus）
-4. **PLACEMENT** — 主体在画面的具体位置（"positioned on the left third" / "centered but offset toward upper-right" / "in the foreground right"）
+2. **ACTION** — 正在做什么，**用反应动词**（yanking / slashing / biting / burning /
+   lowering / slumping），**不用静态动词**（stands / looks / is shown）
+3. **CAMERA** — 镜头四件套：**shot size**（extreme_wide / wide / medium / three_quarter /
+   close_up / insert_extreme_close）+ **angle**（eye_level / low_angle / high_angle /
+   dutch_tilt / birds_eye / worms_eye）+ **lens**（24 / 35 / 50 / 85 / 135mm）+
+   **DoF**（shallow_dof / deep_focus / rack_focus）
+4. **PLACEMENT** — 主体在画面的具体位置（"positioned on the left third" /
+   "centered but offset toward upper-right" / "in the foreground right"）
 5. **DEPTH LAYERS** — 三层景深显式列出：
-   - **FOREGROUND** — 离镜头最近的元素（门框边缘 / 刀刃尖 / 纸屑 / 绳索末端 / 铠甲片 / 烛火 / 尘埃）
+   - **FOREGROUND** — 离镜头最近的元素（门框边缘 / 刀刃尖 / 纸屑 / 绳索末端 / 铠甲片 / 尘埃）
    - **MIDGROUND** — 主体动作发生的层
    - **BACKGROUND** — 两个以上远景元素（建筑剪影 / 远山 / 烟柱 / 旗帜 / 敌军队列 / 天空渐变）
-6. **LIGHTING** — 光源 + 方向 + 色温 + 软硬（"hard side-light from a single candle on the left, deep crimson wash from behind"），禁用泛词 "dramatic lighting"
-7. **MOOD/PALETTE** — 情绪 + 配色绑定（"tense anticipation in desaturated ink black + cinnabar red + bone white"）
+6. **LIGHTING** — 光源 + 方向 + 色温 + 软硬（"hard side-light from a single candle on the
+   left, deep crimson wash from behind"），禁用泛词 "dramatic lighting"
+7. **MOOD/PALETTE** — 情绪 + 配色绑定（"tense anticipation in desaturated ink black +
+   cinnabar red + bone white"）
 
-### v0.3.7 每段必须附中文速记（新增 · 用户可读性硬要求）
-
-用户要审阅分镜「文字说的」和「画面画的」对不对得上，但画面描述如果全是英文，
-用户看不懂；如果被截断，信息就残缺。所以**每个要素段末尾必须追加 `// 中文` 速记**：
+**每段末尾必须追加 `// 中文` 速记**（写给用户看，不是写给模型看的）：
 
 ```
 SUBJECT: Su Wu, 30yo Han envoy, wearing formal dark robe // 苏武 汉使 出塞
@@ -484,112 +312,265 @@ CAMERA: Extreme wide shot, high angle, 24mm lens, deep focus // 大远景 俯拍
 MOOD: solemn duty, desaturated blue-white palette // 庄严 克制的蓝白
 ```
 
-**规则**：
-1. `//` 之后必须是**中文**，写给用户看，不是写给模型的
-2. 3-6 个短词，用空格或「·」分隔，**不写句子**
-3. 必须覆盖该段的画面要点（人物 / 动作 / 关键道具 / 场景）
-4. 英文部分照旧保留（要喂给图像模型），中文部分是给人看的
+规则：`//` 之后必须是中文，3-6 个短词用空格或「·」分隔、不写句子，
+必须覆盖该段的画面要点（人物 / 动作 / 关键道具 / 场景）。
+英文部分照旧保留（要喂给图像模型）。
 
-这样 layout_preview 展示分镜时直接用中文速记，用户不用读英文，也不用看被截断的长句。
+### 4.3 画面叙事性（防「大头贴」）
 
-### 角色一致性五件套 bible（v0.2.3 升级）
+只看到一张人物特写脸 = 失败的画面。每页必须满足「3 要素 + 1 故事动作」：
 
-不要写单一长段落描述（模型只抓前 30% 关键词）。每页 visual 开头必须以**五个独立锚点**列出角色：
+1. **人物** —— 但角色面部占画面 < 1/3（除非该页是特写镜头且有明确戏剧需求）
+2. **场景** —— 具体环境（城楼 / 书房 / 战场 / 街道 / 灯下 / 营帐），
+   含建筑 / 地砖 / 天空 / 树木等可识别元素，至少 2 个
+3. **道具 / 多人 / 互动** —— 至少 1 个故事相关道具（兵器 / 食物 / 灯 / 地图 / 旗帜 /
+   死伤士兵 / 文书 / 食物残骸）+ 0-2 个次要人物 / 围观群众 / 敌人剪影 / 部下
+4. **故事动作** —— 有人正在做某件具体的事（杀 / 煮 / 写 / 倒酒 / 抬尸体 / 抛草人 /
+   围困 / 燃烧），不是静态站立
 
-> "Character bible (FIVE ANCHORS, identical in every frame):
+**镜头分配**（全篇节奏，不能连续 ≥3 页同一 shot size）：
+≥1 张 wide / extreme_wide（建立场景感）+ ≥3 张 medium / three_quarter（推进叙事）+
+≥1 张 close_up（仅用于全篇最戏剧时刻）+ ≥1 张 insert_extreme_close（刀 / 血 / 道具特写）。
+按「开-推-特-退」节奏排版。
+
+❌ 反例（只能看到脸，看不到故事）：
+- "He is shown in profile, looking out through a shattered window." → 1 个人脸 + 1 扇窗
+- "He stands in the center of a vast, empty, abstract space." → 角色占满画面，背景全黑
+- 绝对禁止 "X is shown in..." 开头的身份化描述、禁止 "vast, empty, abstract space"
+  这类无环境的抽象背景、禁止 "A cute illustration of X" / "A clear visualization" /
+  "A friendly cartoon" 这种泛泛描述。
+
+✅ 正例：
+- "Wide establishing shot: the besieged city wall of Suiyang stretches across the frame,
+   with defenders in red hanfu clustered on top of the crenellations, hundreds of black-clad
+   enemy soldiers flooding the valley below, smoke from burning siege towers rising in the
+   background, one defender on a wooden platform lowers a straw dummy by rope over the wall
+   while arrows streak through the night sky."
+
+### 4.4 连环画多人物（历史典故 / 古典 / 武侠 / 江湖专用）
+
+戴敦邦 / 顾炳鑫 / 贺友直派连环画核心是**单页多人物 + 信息密集 + 满画幅叙事**：
+
+- **主人物 ≥ 3 个**（主角 + 配角 + 围观/路人 + 1-2 个远景人物活动）
+- **满画幅构图**：禁止大面积空白/留白作主体
+- **次要人物活动**：背景里要有 2-3 个在做具体事的角色（送别邻人 / 商队 / 宫女 /
+  侍卫 / 牧羊人 / 孩童玩耍 / 远处商旅）
+- **多道具叙事**：每画面至少 2 个具体道具（兵器 / 食物 / 旗帜 / 文书 / 灯 / 行李 / 茶碗）
+- **互动关系**：人物之间要有空间关系和视线互动（不是各站各的）
+
+### 4.5 角色一致性（防「换人」+ 防「性转」）
+
+**所有页面的角色描述必须完全一致**，且必须**符合主题时代背景**。
+一旦跨页签名不同，读者会认为换了人或穿越了，故事连续性直接崩掉。
+
+**a) 视觉签名锁定** —— 同一主角在所有页面的核心签名必须一致：
+- **服饰**：袍色 + 冠帽（幞头/官帽/玉冠）+ 玉带（官员）/ 盔甲 + 战盔 + 红缨（战时）
+- **面部**：年龄 + 须型（蓄短须/无须/长须）+ 眉形（直眉/剑眉/柳叶眉）+ 妆发
+- **身体**：身高 + 体型（lean/medium/stout）
+- 战时换盔甲 OK，但要写明是同一人物；❌ 禁止发型/妆发/服饰完全不同，
+  尤其禁止 male 直眉玉簪 变成 female 柳叶眉步摇（性转）
+
+**b) 五件套 bible** —— 不要写单一长段落描述（模型只抓前 30% 关键词），
+每页 visual 开头必须以**五个独立锚点**列出角色：
+
+> Character bible (FIVE ANCHORS, identical in every frame):
 > (1) Face shape: oval face, sharp jawline, refined cheekbones.
 > (2) Eyes: large double-lid expressive eyes with sharp winged eyeliner, dark brown irises.
 > (3) Eyebrows: thin angled swordsman brows, slightly furrowed.
 > (4) Lip & mouth: well-defined cupid's bow lips, normally closed, decisive line of jaw.
-> (5) Hair: Han-Chinese historical figure, high topknot bound with cloth ribbon (no metal crown), long black hair flowing behind when in motion.
-> Modern manhua body proportions (1:2 head-to-body). Age 20-30. Cel-shaded manhua face."
+> (5) Hair: Han-Chinese historical figure, high topknot bound with cloth ribbon (no metal
+>     crown), long black hair flowing behind when in motion.
+> Modern manhua body proportions (1:2 head-to-body). Age 20-30. Cel-shaded manhua face.
 
-### 表情 anchor（v0.2.3 升级）
+时代锚点（按主题选，**不要串时代**）：
+- 现代 / 科学 / 经济 / 商业 / 心理学 →
+  "a small scientist figure with short black hair, round wire-frame glasses, light grey
+  sweater, dark trousers, neutral expression, age 30"
+- 历史典故 / 国学 / 古典 / 古风 →
+  "a Han-Chinese historical person in traditional hanfu robe (crossed collar, wide sleeves,
+  sash belt, hair pinned in classical style with subtle ornaments), elegant elongated
+  proportions typical of classical Chinese figure painting, age 20-30, serene expression"
+- ❌ 禁止「现代科学家」出现在历史典故里 / 「古代人物」出现在 AI 算法主题里
 
-**绝不能**用 "defiant" / "sad" / "scared" 这种形容词描述情绪，模型画不出来。
-必须从以下 8 个 expression anchors 中**每页选 1 个**直接写到 visual 字段里，
-**用可执行的具体面部元素**而非情绪词：
+**c) 表情** —— **绝不能**用 "defiant" / "sad" / "scared" 这种情绪形容词，模型画不出来。
+每页从下面 8 个 expression anchor 中选 1 个，用可执行的面部元素而非情绪词：
 
-- **neutral** — serene closed lips, relaxed brow, eyes looking forward, neutral composed face
-- **rage_scream** — mouth FORCIBLY WIDE OPEN stretching jaw, eyes glaring skyward with visible white, veins on neck bulging, brow deeply furrowed, brow drawn down hard over glaring eyes, head tilted back
-- **sobbing_silence** — head bowed low, eyes closed tight, single tear visible on cheek, knuckles white gripping object, mouth pressed in trembling thin line
-- **grim_resolve** — jaws clenched, eyes narrowed with cold focus, lips pressed in a thin bloodless line, slight nod forward
-- **awed_stillness** — eyes wide round staring, lips parted in shock, breath held, freezing mid-motion, body stillness while expression active
-- **sneering_scorn** — one corner of mouth lifted, eyes half-lidded looking down at subject, chin tilted up, dismissive head tilt
-- **tender_grief** — soft downcast eyes, faint trembling smile of farewell, hand reaching toward something / someone just out of frame, tears unshed
-- **fierce_command** — chin forward, eyes locked on viewer, brows drawn flat in cold authority, arm extended forward with object, mouth open giving order
+- `neutral` — 沉静闭唇，眉眼放松，平视前方
+- `rage_scream` — 嘴大张到极限，瞪眼仰视，颈部青筋暴起，头后仰
+- `sobbing_silence` — 头低垂，双眼紧闭，颊上一滴泪，指节发白攥紧物件，唇线颤抖
+- `grim_resolve` — 牙关紧咬，眼神冷峻收窄，唇抿成无血一线，微微前倾点头
+- `awed_stillness` — 双眼圆睁，唇微张，屏息，动作定格，身体静止而表情剧烈
+- `sneering_scorn` — 一侧嘴角上扬，半垂眼俯视，下巴抬起
+- `tender_grief` — 眼低垂，告别时微微颤抖的笑，手伸向画外某人，眼未落泪
+- `fierce_command` — 下巴前伸，目光锁定观者，双眉平压威仪，手臂前伸持物，嘴张开发令
 
-### 镜头分配铁律（12 页版）
+**d) 画面与 caption 严格匹配** —— 每页 visual 的 ACTION 段必须包含 caption 的核心动作/事件：
+- caption 含「砍断指头」→ visual 必须有「刚砍断 / 裹血布 / 桌上有刀」
+- caption 含「36 将尽死」→ visual 必须有「倒下尸体堆 + 多人战斗」
+- caption 含「城破火光」→ visual 必须有「火球 / 烟柱 / 城破洞」
+- caption 含「射雀充饥」→ visual 必须有「弓 + 飞鸟 + 多人射箭」
 
-每篇必须有**至少 4 张 wide/extreme_wide**（建立场景感）+ **至少 3 张 medium/three-quarter**（推进叙事）+ **至少 1 张 close_up**（仅用于全篇最戏剧时刻）+ **至少 1 张 insert_extreme_close**（刀 / 血 / 道具符号特写）。
-绝不能连续 ≥ 3 页同一 shot size。给每章分配镜头时按"开-推-特-退"节奏排版。
+ACTION 段第一句必须**直接复述 caption 核心动作**；❌ 禁止视觉只画人物站立/沉思，
+画面与 caption 无关。
 
-## 输出格式（严格 JSON，不要任何解释文字）
+### 4.6 零文字（防画面出字）
 
+模型默认会给「中国风装饰」加字符（袍上花纹被读成篆字、地图被画上汉字、玉佩上刻字），
+**每页 visual 末尾必须明确写这句强化句**：
+
+```
+STRICT NO TEXT — plain fabric robes with NO characters/symbols/inscriptions,
+map shows ONLY abstract terrain (rivers/mountains) without any writing,
+armor is PLAIN unadorned, no characters on blade.
+```
+
+同时 visual 字段**严禁**包含（即使概念正确，模型也会把字面文字画出来）：
+- ❌ 具体年份数字（"clock showing 2017" → 会画出 "2017"）
+- ❌ 数学公式 / 字母 / 符号（"equations on the wall" → 会画出假字符）
+- ❌ "labeled A and B"（被读成真写 A 和 B 字样）
+- ❌ "decorative patterns" / "calligraphy" / "inscribed" 这类模型会当真画字符的词
+
+✅ 改写示例：
+- "a wall clock with two hands but no numerals, hour hand pointing left"
+- "a bar chart with two color-distinguished bars (one warm red, one cool blue), no text"
+
+## 5. characters[]（人物故事必填）
+
+**触发条件**：主题是「人物故事 / 传记 / 历史人物 / 名名 / 武侠 / 江湖 / 古典小说人物」
+时，必须输出 `characters` 数组（≥1 个主要人物）。
+
+每个角色四个字段，**全部必填**：
+
+| 字段 | 要求 |
+|---|---|
+| `name` | 角色名（如「郭子仪」） |
+| `role` | 主角 / 配角 / 反派 / 路人 |
+| `era` | **朝代/年代**（如「唐代」「春秋末年」「明初」）—— 决定服饰考据，见 §7 |
+| `gender` | **只能是字符串 `"male"` 或 `"female"`**，见下方硬约束 |
+| `visual_signature` | 中文视觉签名 30-80 字：精确描述面部/服饰/配饰/气质/年龄，**严格按 era 对应的朝代速查表写** |
+
+示例：
+```
+"visual_signature": "唐代老将军, 60-70 岁, 方颌, 丹凤眼, 剑眉, 蓄短须, 戴黑色软脚幞头, 穿朱砂色圆领窄袖袍配玉带蹀躞带, 身形清瘦挺拔"
+```
+
+**`gender` 是硬约束，不是建议**：
+- 只接受字符串 `"male"` / `"female"` 两种值。写成对象、写成 `"男"`/`"man"`/`"M"`、
+  留空或干脆不写这个字段，都会在跑图前被直接拦下，一张图都不会跑。
+- **为什么必须填**：性别决定角色参考图的面部锚点，而参考图会经 i2i 传进**每一页**。
+  一旦猜错，男性角色会被画成女性，整批图全崩。
+- 按史实填，不要按印象/戏剧形象填：夫差是 `male`（不是戏曲里的花脸）、西施是 `female`。
+- `visual_signature` 里也要写明性别特征（如「面容清瘦，蓄短须」）—— 双重保险：
+  gender 定锚点，signature 定细节。
+
+**visual 字段里的角色描述规则**：
+- ✅ 每页 visual 开头**完整重复**该角色在 `characters[]` 里的视觉签名翻译
+  （不只是 "the man" 或 "Guo Ziyi"）
+- ✅ 多角色场景里每个角色的核心特征都必须出现
+- ✅ **第二行写 `[GENDER:xx]` 标记**（角色描述之后、ACTION 之前），三选一：
+  - `[GENDER:male]` — 单人物为男性（历史典故主角最常见，如张巡 / 郭子仪 / 文天祥）
+  - `[GENDER:female]` — 单人物为女性（如王昭君 / 杨贵妃 / 武则天）
+  - `[GENDER:mixed]` — 男女混合场景（夫妻对坐 / 将军审问叛军女眷）
+  图像 prompt 会按它自动选对应妆发分支（女性桃花腮/步摇 / 男性玉冠/玉簪/剑眉）。
+  漏标记或写错会导致男性主角被性转成女子脸。
+- ❌ 不要用代词（"he" / "the general" / "the khan"）省略人物身份
+
+## 6. 输出格式（严格 JSON，不要任何解释文字，不要 markdown 代码块）
+
+```json
 {
   "title": "公众号文章标题（15-25 字）",
   "subtitle": "副标题（如「基于历史档案与流行病学研究」）",
   "summary": "导语 1-2 句话（30-50 字）",
   "preface": "卷首题词（10-20 字）",
   "epigraph": "题记（30-50 字）",
-  "postscript": "后记（30-80 字）",
-  "characters": [{"name": "角色名", "role": "主角/配角/反派",
-                  # v0.3.22: enum 而不是字符串 —— 避免 LLM 输出 "男"/"man"/"M"
-                  # 这类乱七八糟的值让 preflight 校验不通过。enum 强制两个之一。
-                  "gender": {"enum": ["male", "female"]},
-                  "visual_signature": "..."}]
+  "postscript": "后记（30-80 字，含反直觉/反常识）",
+  "sources": "本文史料依据的典籍名，多部用顿号分隔（如《孙子兵法·谋攻篇》《左传·僖公三十年》）。必须与本篇题材真实相关，不得张冠李戴",
+  "characters": [
     {
-      "name": "主角姓名（如「郭子仪」）",
-      "role": "角色身份（主角 / 配角 / 反派 / 路人）",
-      "era": "v0.3.17 必填 — 朝代/年代（如「唐代」「春秋末年」「明初」）",
-      "visual_signature": "中文视觉签名（30-80 字）：精确描述面部/服饰/配饰/气质/年龄，**严格按 era 字段对应的朝代速查表写**。例：'唐代老将军, 60-70 岁, 方颌, 丹凤眼, 剑眉, 蓄短须, 戴黑色软脚幞头, 穿朱砂色圆领窄袖袍配玉带蹀躞带, 身形清瘦挺拔'"
+      "name": "角色名",
+      "role": "主角",
+      "era": "唐代",
+      "gender": "male",
+      "visual_signature": "唐代老将军, 60-70 岁, 方颌, 丹凤眼, 剑眉, 蓄短须, 戴黑色软脚幞头, 穿朱砂色圆领窄袖袍配玉带蹀躞带, 身形清瘦挺拔"
     }
   ],
   "pages": [
     {
       "page": 1,
       "highlight": "1347",
-      "visual": "画面描述（英文 80-150 词，必须按 v0.2.3 七要素结构组织：SUBJECT / ACTION / CAMERA 四件套 / PLACEMENT / DEPTH LAYERS / LIGHTING / MOOD；开头列角色五件套；v0.3.0 第二行写 [GENDER:male|female|mixed] 性别标记；选 1 个 expression anchor）",
+      "visual": "第一段必须是 CONCEPT 段，其后按七要素组织（见 §4.2），开头列角色五件套 + [GENDER:xx]，每段末尾附 // 中文速记，末尾写 STRICT NO TEXT 强化句",
       "caption": "场景说明（中文 10-20 字）",
-      "dialogue": "文言原文引句（8-50字，出自《史记》/《左传》等，**每页必填**）",
+      "dialogue": "文言原文引句（8-50 字，出自《史记》/《左传》等，每页必填）",
       "narration": "旁白或空字符串",
-      "body": "长段落正文（**严格 100-150 字**——图为主、文字为脚注）",
-      "keywords": ["关键词1", "关键词2", "关键词3", "关键词4", "关键词5"],
-      "punchline": "白话点题金句（10-22字，渲染成定格瞬间）",
+      "body": "正文（严格 100-150 字，3-5 个短句，现代白话，三拍结构）",
+      "keywords": ["人名", "地名", "朝代", "事件", "官职"],
+      "punchline": "白话点题金句（10-22 字）",
       "key_visual": "视觉锚点"
     }
   ]
 }
+```
 
-### v0.2.5 人物一致性规则（人物故事必读）
+注意 `"gender"` 的值是**裸字符串** `"male"`，不是 `{"enum": ["male","female"]}`，
+也不是数组或对象。`"era"` 同理是字符串。
 
-**触发条件**：当主题是「人物故事 / 传记 / 历史人物 / 名人 / 武侠 / 江湖 / 古典小说人物」时，必须输出 `characters` 数组（≥1 个主要人物）。
+## 7. 朝代服饰考据（仅历史题材需要，速查表见系统提示末尾）
 
-**visual 字段角色描述规则**：
-- ✅ 每页 visual 开头必须**完整重复**该角色在 characters 数组里的视觉签名翻译（不只是"the man"或"Guo Ziyi"）
-- ✅ 多角色场景里每个角色的核心特征都必须出现（避免换脸/换人 bug）
-- ❌ 不要用代词（"he" / "the general" / "the khan"）省略人物身份
+**每个角色必填 `era`，`visual_signature` 必须严格按该 era 对应的朝代速查表写。**
+preflight 会用 `ANACHRONIC_MARKERS` 事后阻塞后世器物，但**它拦不住你没写**，
+所以这一步必须在拆镜时就做对。
 
-**作用**：Mavis 拿到 storyboard 后会先用 characters 跑角色 4 视图参考图（front / 3-4 / side / back），再每页用 i2i 跑，保证 10 页跨章跨段角色稳定。这是 v0.2.5 强约束。
+自检两条：
+- **单件错配**：春秋角色写「圆领袍 / 武冠 / 幞头」= 唐/汉/宋的元素，拆开重写。
+- **三件错配**：「圆领袍 + 武冠 + 幞头」同时出现 = 三朝错配，立即重写。
+  「乌纱帽 + 补子」用于明以前 = 明代错配。「顶戴花翎 + 朝珠」用于清以前 = 清代错配。
 
-## v0.3.0 性别标记铁律（防"性转"bug，2026-09-24 新增）
-
-**根因**：chinese_lianhuanhua_classic 默认 anchor 把妆发硬写"女性化"（桃花腮+花钿+步摇+柳叶眉），
-如果 visual 描述男性主角（"Zhang Xun, 40yo male general"），anchor 强制桃花腮/步摇 → 模型脸部女性化 + 服饰中性 → 性转成女性。
-
-**铁律**：每页 visual **第二行**（角色描述之后、ACTION 之前）必须明确写出性别标记，格式：
-- `[GENDER:male]` — 单人物性别为男性（最常见于历史典故主角，如张巡/郭子仪/文天祥）
-- `[GENDER:female]` — 单人物性别为女性（如王昭君/杨贵妃/武则天）
-- `[GENDER:mixed]` — 男女混合场景（如"夫妻对坐"、"将军审问叛军女眷"）
-
-**示例**：
-- ✅ "SUBJECT: Zhang Xun, 40yo Tang general... [GENDER:male] ACTION: he grips his sword..."
-- ✅ "SUBJECT: Wang Zhaojun... [GENDER:female] ACTION: she plays the pipa..."
-- ✅ "SUBJECT: Zhang Xun and his wife [GENDER:mixed] ACTION: they examine a map..."
-
-**作用**：build_image_prompt 按 [GENDER:xx] 自动选对应妆发分支（女性桃花腮/步摇 / 男性玉冠/玉簪/剑眉），
-不会因为 anchor 默认女性化导致男性主角被性转。如果漏标记，build_image_prompt 会自动从代词检测，但显式标记更稳。
+不要因为「画面好看」而用后世元素 —— 戴敦邦派连环画追求的是**考据工笔**，
+穿错朝代直接破坏沉浸感。
 """
+
+
+# --- 朝代速查表：条件注入（v0.3.24）--------------------------------------
+#
+# 速查表正文**只存一份**，在 prompts.CN_DYNASTY_COSTUME_GUIDE（preflight 用的
+# 同一份）。v0.3.23 之前它在 planner prompt 里被**内联复制**了一份扩写版，
+# 两者已经各自漂移；而且它无条件发给每一次调用 —— 跑「峰终定律」这种
+# 经济学题材时，1.2K~2K 字的朝代服饰表是纯噪声，白占 token 和模型注意力。
+#
+# 现在按 style_id 决定是否挂载：三个中国古典风格才注入。
+# 这样历史题材的考据约束一点没丢，非历史题材不再为无关参考数据付费。
+
+def _era_guide_for(style_id: str) -> str:
+    """历史/古典风格才返回朝代速查表，其余返回空串。"""
+    if style_id not in _CN_HISTORY_STYLES:
+        return ""
+    try:
+        from .prompts import CN_DYNASTY_COSTUME_GUIDE
+    except Exception:  # pragma: no cover - 独立运行兜底
+        return ""
+    return (
+        "\n\n---\n\n"
+        "## 8. 朝代服饰速查表（本条为最高优先级，拆镜前先查表）\n\n"
+        "上表的 `era` 字段决定年代 → `visual_signature` 必须严格用本表的服饰/冠帽/配饰。\n\n"
+        + CN_DYNASTY_COSTUME_GUIDE.strip()
+    )
+
+
+def build_system_prompt(style_id: str, target_pages: int | None = None) -> str:
+    """拼最终 system prompt：基础铁律 + 动态页数 + 条件朝代表。
+
+    v0.3.24：原来是 `PLANNER_SYSTEM_PROMPT.replace(...)` 一处字符串替换，
+    页数硬编码在 prompt 第一行里（"输出 6-10 页"）必须靠 replace 命中，
+    改文案就会静默失效。改成显式格式化。
+    """
+    p = PLANNER_SYSTEM_PROMPT
+    if target_pages is not None:
+        p = p.replace(
+            "输出 6-10 页分镜脚本（JSON 格式）",
+            f"输出 {target_pages} 页分镜脚本（JSON 格式）",
+        )
+    return p + _era_guide_for(style_id)
 
 
 def _build_planner_user_msg(topic: str, bullets: list[str], style_id: str, canon_injection: str = "") -> str:
@@ -662,14 +643,13 @@ def _call_llm_storyboard(
     )
     user_msg = _build_planner_user_msg(topic, bullets, style_id, canon_injection)
 
-    # 动态 system prompt：把"输出 6-10 页"换成"输出 {target_pages} 页"
-    sys_prompt = PLANNER_SYSTEM_PROMPT.replace(
-        "输出 6-10 页分镜脚本",
-        f"输出 {target_pages} 页分镜脚本",
-    )
+    # 动态 system prompt：页数 + 条件朝代表（v0.3.24 走 build_system_prompt）
+    sys_prompt = build_system_prompt(style_id, target_pages=target_pages)
 
-    logger.info("Planner LLM call: model=%s, topic=%s, bullets=%d, target_pages=%d",
-                cfg.llm_model, topic[:30], len(bullets), target_pages)
+    logger.info("Planner LLM call: model=%s, topic=%s, bullets=%d, target_pages=%d, "
+                "sys_prompt=%d chars, era_guide=%s",
+                cfg.llm_model, topic[:30], len(bullets), target_pages,
+                len(sys_prompt), "on" if _era_guide_for(style_id) else "off")
 
     try:
         resp = client.chat.completions.create(
@@ -767,6 +747,7 @@ def _call_llm_storyboard(
         preface=data.get("preface", ""),
         epigraph=data.get("epigraph", ""),
         postscript=data.get("postscript", ""),
+        sources=data.get("sources", ""),
         characters=data.get("characters", []),
     )
 

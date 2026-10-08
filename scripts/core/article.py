@@ -28,6 +28,12 @@ class ArticleInput:
     storyboard: Storyboard
     page_image_urls: list[str]
     title: str | None = None
+    # v0.3.18：文末史料出处。原先模板 c 把「《旧唐书》与回纥外交档案考略」
+    # **硬编码**在渲染函数里（v0.2.8.0 加的脚注），任何非唐代题材都会撞上
+    # 完全不搭的出处（实测「不战而屈人之兵」项目印出旧唐书/回纥）。
+    # 现在改为参数：优先用调用方传入（run.py 从 storyboard.sources 取），
+    # 没传就回退到中性说法，不再冒充具体典籍。
+    sources: str | None = None
 
 
 def _esc(s: str) -> str:
@@ -404,7 +410,8 @@ _HIGHLIGHT_KEYWORDS: list[str] = [
 
 
 def _split_paragraphs(text: str, max_len: int = 42,
-                      merge_short: bool = True) -> list[str]:
+                      merge_short: bool = True,
+                      max_paras: int | None = None) -> list[str]:
     """把长正文切成 2-3 个短段 —— 公众号读者没耐心读一整块 150 字。
 
     v0.3.8：用户反馈「不要出现大段大段文字」。
@@ -442,7 +449,7 @@ def _split_paragraphs(text: str, max_len: int = 42,
             out.append(buf)
 
     if not merge_short:
-        return out
+        return _balance_paragraphs(out, max_paras)
 
     merged: list[str] = []
     for p in out:
@@ -450,7 +457,71 @@ def _split_paragraphs(text: str, max_len: int = 42,
             merged[-1] += p
         else:
             merged.append(p)
-    return merged
+    return _balance_paragraphs(merged, max_paras)
+
+
+def _balance_paragraphs(paras: list[str], max_paras: int | None) -> list[str]:
+    """把段数压到 <= max_paras，且各段长度尽量均衡。
+
+    v0.3.18（图为主 · 降文字密度）：只靠 `max_len` 压不住段数。
+    `max_len` 只在**单句超长**时才二次切分，而 120 字正文常是 4 个
+    各 20-50 字的短句 —— 每句都不到 max_len，于是原样切成 4 段，
+    图文节奏照样被切碎。要真正落到「2-3 段」，得有一个**段数上限**。
+
+    均衡而不是贪心从前往后塞：贪心会把前面塞成一大段、后面留短段，
+    视觉上更不平衡。这里按 total/k 逐段逼近，收尾时把余量并入最后一段。
+    """
+    if not max_paras or len(paras) <= max_paras:
+        return paras
+
+    total = sum(len(p) for p in paras)
+    k = max_paras
+    target = total / k
+
+    out: list[str] = []
+    buf = ""
+    for i, p in enumerate(paras):
+        remaining_paras = len(paras) - i
+        need = k - len(out)  # 还需要切出的段数（含当前这段）
+        # 剩余段数已经等于 need：必须立刻切，否则后面没段可分
+        if buf and (len(buf) >= target or remaining_paras <= need):
+            out.append(buf)
+            buf = ""
+        buf += p
+    if buf:
+        out.append(buf)
+
+    # 收尾：极端情况下仍超段数（段落全为空串等），强行并入最后一段
+    while len(out) > k:
+        out[-2] += out[-1]
+        out.pop()
+
+    # 均衡收尾：某段明显过长（>1.5×目标）时，把最短的相邻两段并成一段。
+    # 走"图为主"排版时，一条 70+ 字的整块文字在手机上就是一堵墙，
+    # 和 2 段 40-60 字的观感差别很大。合并到不再超长为止。
+    def _longest(idx: int) -> int:
+        return max(range(len(out)), key=lambda i: len(out[i]))
+
+    def _adjacent_shortest() -> tuple[int, int]:
+        best, bi = None, 0
+        for i in range(len(out) - 1):
+            s = len(out[i]) + len(out[i + 1])
+            if best is None or s < best:
+                best, bi = s, i
+        return bi, bi + 1
+
+    while len(out) > 2 and len(out[_longest(0)]) > 1.5 * target:
+        before = max(len(x) for x in out)
+        i, j = _adjacent_shortest()
+        out[i] += out[j]
+        del out[j]
+        # 合并没让最长段变短 → 继续合只会把全文并成一段。必须停。
+        # v0.3.18 实测：4 段 21/27/47/27（总 122）先并成 21+27=48，
+        # 最长段仍是 74 不变；不设这个下界就会一路并成 1 段 122 字。
+        if max(len(x) for x in out) >= before:
+            break
+
+    return out
 
 
 def _first_sentence(text: str) -> str:
@@ -514,7 +585,10 @@ def render_template_c(inp: ArticleInput) -> str:
     设计参考：人物/三联/远川/半佛 等公众号深度长文模板。
     """
     sb = inp.storyboard
-    title = inp.title or sb.title
+    # 注意：模板 c 的标题由 _render_cover(sb) 内部读 sb.title，**不认 inp.title**。
+    # 同理见 render_template_c_v3。目前所有调用点都传 title=sb.title，所以无行为差异；
+    # 但若将来要支持"改标题不重跑分镜"，必须先把 title 传进 _render_cover，
+    # 否则会被静默吞掉。
     out = ['<section data-template="c-v2">']
 
     preface = sb.preface or "知 识 故 事"
@@ -533,9 +607,9 @@ def render_template_c(inp: ArticleInput) -> str:
     # === 开篇 (v0.2.8.0: 改名"本篇要旨"+ sz1 尺寸 + 文末出处) ===
     # 1. 本篇要旨 label (11px 朱砂小标)
     out.append(
-        f'<p style="text-align:center;font-size:11px;color:#9b2332;'
-        f'letter-spacing:6px;margin:32px 20px 6px 20px;font-weight:600;">'
-        f'·  本 篇 要 旨  ·</p>'
+        '<p style="text-align:center;font-size:11px;color:#9b2332;'
+        'letter-spacing:6px;margin:32px 20px 6px 20px;font-weight:600;">'
+        '·  本 篇 要 旨  ·</p>'
     )
     # 2. 题眼 quote (18px 朱砂大字, hero quote)
     if preface:
@@ -567,12 +641,21 @@ def render_template_c(inp: ArticleInput) -> str:
                 f'{_esc(epigraph)}</p>'
             )
 
-    # 4. 朱砂红双线分隔
+    # 4. 朱砂红分隔线（**单线**）
+    # v0.3.18 两次修正，根因值得记下来：
+    #   ① 原实现是「两个空 `<p>` 各带一条 border-top」，注释里写的是
+    #      「朱砂红**双线**分隔」——双线是模板的**刻意设计**，不是 bug。
+    #      浏览器里两个空段落没有文字，看起来就是两条线。
+    #   ② 但公众号编辑器把空 `<p>` 当**可编辑空段落**，后台会显示成两行
+    #      带框的空行，而不是装饰线（用户实测反馈）。
+    #   ③ 我第一次只修了 ②（2 个空 p → 1 个 p），却保留了 border-bottom，
+    #      结果视觉上**仍是两条线** —— 用户反馈"两条横线还在"。
+    # 教训：修表象（编辑框）不等于修问题（两条线）。双线本身才是用户不要的东西。
+    # 现在改为**单条** border-top，段内放 `&nbsp;` 保证不是空段落。
     out.append(
-        '<section style="margin:0 20px 8px 20px;padding:8px 0;">'
-        '<p style="border-top:1px solid #9b2332;margin:0;"></p>'
-        '<p style="border-top:1px solid #9b2332;margin:2px 0 0 0;"></p>'
-        '</section>'
+        '<p style="margin:14px 20px 22px 20px;padding:8px 0 0 0;'
+        'border-top:1px solid #9b2332;'
+        'font-size:1px;line-height:1px;">&nbsp;</p>'
     )
 
     # === 正文 (v0.2.7.3 高级感：章节号缩成左标签 + h2 居中大字 + 正文 line-height 1.9) ===
@@ -602,10 +685,13 @@ def render_template_c(inp: ArticleInput) -> str:
                 f'{_esc(page.caption)}</h2>'
             )
             # h2 下方短朱砂线
+            # v0.3.18：装饰线改用**段落自身 border** 画，并在段内放 `&nbsp;`。
+            #   原来靠一个空 `<span>` 撑线，整个 `<p>` 没有文字 —— 公众号编辑器
+            #   会把它当可编辑空段落，在后台显示成一条空行框（用户实测）。
             out.append(
-                f'<p style="margin:0 20px 20px 20px;">'
-                f'<span style="display:inline-block;width:24px;height:2px;'
-                f'background-color:#9b2332;"></span></p>'
+                '<p style="margin:0 20px 20px 20px;width:28px;'
+                'border-top:2px solid #9b2332;'
+                'font-size:1px;line-height:1px;">&nbsp;</p>'
             )
 
         # 图 + 图下文言蒙版（v0.3.11）
@@ -615,38 +701,41 @@ def render_template_c(inp: ArticleInput) -> str:
         # v0.3.12 调优（实图评审后）：
         #   初版渐变 0→0.55→0.86 太陡、蒙版太矮，把画面主体（p5 的羊群、p1 的杖）
         #   压掉了。改为更柔的长过渡 + 更足的渐变高度，文言上移一点让读起来更稳。
+        # v0.3.18 重大修正：图下字幕蒙版从「定位叠加」改为「负 margin 压图」
+        #   旧实现：外层 position:relative + 两层 position:absolute 蒙版。
+        #   **微信编辑器会过滤 position:absolute** —— absolute 一失效，蒙版就
+        #   变成普通流内元素，从"压在图底"掉成"图下面的独立色块"（用户实测）。
+        #   浏览器预览正常，所以本地 HTML 看不出问题，只能在后台暴露。
+        #   改法：img 和字幕放进同一个容器，字幕用 `margin-top:-62px` 上移，
+        #   数学上正好盖住图片底部 62px，**下沿与图片下沿精确对齐**。
+        #   微信支持负 margin，不支持定位 —— 这是唯一可靠的重叠方式。
+        #   渐变+实底合并进 background 简写的多层写法（渐变在上、底色在下）。
         if i < len(inp.page_image_urls):
             url = inp.page_image_urls[i]
             quote = (getattr(page, "dialogue", "") or "").strip()
             if quote:
-                # 转义后保留换行（多句原文分行显示）
                 q_html = _esc(quote).replace("\n", "<br/>")
-                # v0.3.13：双层蒙版
-                #   下层：半透明实底色板（高度按文字区固定 86px，容纳 padding+两行）
-                #   上层：渐变过渡（0 → 半透明），做视觉过渡，避免生硬切口
-                # 单靠渐变在**浅色图**上（如 p3 雪地、p10 枯柳冬景）仍然偏透，
-                # 白色楷体压在米白雪地上读不清 —— 加一层实底才稳。
+                # 单行时高度精确 = 30(padding-top) + 24(line-height) + 8(padding-bottom)
+                #            = 62px，与负 margin 完全抵消；多行时蒙版自然向上长高。
                 mask = (
-                    # 下层：实底色板
-                    f'<div style="position:absolute;left:0;right:0;bottom:0;'
-                    f'height:86px;background:rgba(28,22,16,0.52);"></div>'
-                    # 上层：渐变过渡
-                    f'<div style="position:absolute;left:0;right:0;bottom:0;'
-                    f'padding:54px 18px 16px 18px;'
-                    f'background:linear-gradient(180deg,'
+                    f'<p style="margin:-62px 0 0 0;'
+                    f'padding:30px 16px 8px 16px;'
+                    f'background:'
+                    f'linear-gradient(180deg,'
                     f'rgba(24,18,12,0) 0%,'
-                    f'rgba(24,18,12,0.30) 45%,'
-                    f'rgba(24,18,12,0.55) 100%);">'
-                    f'<p style="margin:0;font-family:STKaiti,KaiTi,楷体,serif;'
-                    f'font-size:16px;line-height:27px;color:#faf6ec;'
-                    f'letter-spacing:1.5px;line-break:strict;'
+                    f'rgba(24,18,12,0.24) 45%,'
+                    f'rgba(24,18,12,0.50) 100%),'
+                    f'rgba(28,22,16,0.40);'
+                    f'font-family:STKaiti,KaiTi,楷体,serif;'
+                    f'font-size:15px;line-height:24px;color:#faf6ec;'
+                    f'letter-spacing:1.5px;line-break:strict;text-align:center;'
                     f'text-shadow:0 1px 4px rgba(0,0,0,0.85),0 0 14px rgba(0,0,0,0.6);">'
-                    f'{q_html}</p></div>'
+                    f'{q_html}</p>'
                 )
             else:
                 mask = ""
             out.append(
-                f'<div style="position:relative;margin:0 20px 22px 20px;">'
+                f'<div style="margin:0 20px 22px 20px;">'
                 f'<img src="{_esc(url)}" style="max-width:100%;display:block;" '
                 f'data-page="{page.page}" />'
                 f'{mask}'
@@ -658,12 +747,18 @@ def render_template_c(inp: ArticleInput) -> str:
         # v0.3.8.1：去掉首行缩进 —— 缩进是"印刷体连续正文"的规矩，
         # 靠它标识段首。现在是一句一段、段间距已标明边界，再缩进只会
         # 让左边参差不齐；现代公众号主流排版也不用缩进。
+        # v0.3.18（图为主 · 降文字密度）：max_len 42 → 64，段间距 14 → 16。
+        #   原 42 字上限把 150 字正文切成 4-5 段，每段 1 句，图文节奏被切碎，
+        #   视觉上文字块密度和图几乎持平 —— 违背「图为主」的初衷。
+        #   64 字上限切成 2-3 段，每段是一个完整意思（讲事 / 说破 / 落点）。
+        # v0.3.18 追加 max_paras=3：光靠 max_len 压不住段数（4 个 20-50 字的
+        #   短句各自都不超限，会原样切成 4 段）。段数上限才是「降密度」的关键。
         if body:
             page_kws = getattr(page, 'keywords', []) or []
-            for seg in _split_paragraphs(body):
+            for seg in _split_paragraphs(body, max_len=64, max_paras=3):
                 out.append(
-                    f'<p style="font-size:15px;line-height:26px;color:#1a1a1a;'
-                    f'margin:0 20px 14px 20px;'
+                    f'<p style="font-size:15px;line-height:28px;color:#1a1a1a;'
+                    f'margin:0 20px 16px 20px;'
                     f'text-align:justify;">'
                     f'{_highlight_keywords(seg, page_kws)}</p>'
                 )
@@ -700,10 +795,11 @@ def render_template_c(inp: ArticleInput) -> str:
     # 现代启示作为"金句卡" (v0.2.7.4: 更大字 + 强 padding + 大留白收束 + 头部标识强化)
     if postscript:
         # 1) 上方细线分隔 + "本篇收束" 标
+        # v0.3.18：同 h2 短线，装饰线改用段落 border + &nbsp;，避免后台空行框
         out.append(
-            '<p style="margin:48px 20px 0 20px;">'
-            '<span style="display:inline-block;width:100%;height:1px;'
-            'background-color:#9b2332;"></span></p>'
+            '<p style="margin:48px 20px 0 20px;'
+            'border-top:1px solid #9b2332;'
+            'font-size:1px;line-height:1px;">&nbsp;</p>'
         )
         out.append(
             '<p style="text-align:center;font-size:11px;color:#9b2332;'
@@ -723,9 +819,9 @@ def render_template_c(inp: ArticleInput) -> str:
         )
         # 3) 收束横线 + 结尾"· · ·"
         out.append(
-            '<p style="margin:0 20px 0 20px;">'
-            '<span style="display:inline-block;width:100%;height:1px;'
-            'background-color:#9b2332;"></span></p>'
+            '<p style="margin:0 20px 0 20px;'
+            'border-top:1px solid #9b2332;'
+            'font-size:1px;line-height:1px;">&nbsp;</p>'
         )
         out.append(
             '<p style="margin:24px 20px 32px 20px;text-align:center;'
@@ -736,13 +832,21 @@ def render_template_c(inp: ArticleInput) -> str:
     # v0.2.7: 删除"后记"块（与现代启示内容重复，冗余）
 
     # v0.2.8.0: 文末出处脚注（用户选定方案 B）
+    # v0.3.18: 去硬编码 —— 原先写死「《旧唐书》与回纥外交档案考略」，
+    #   对任何非唐代题材都是错的。改为读 inp.sources，缺省用中性兜底。
+    # v0.3.18: 同时修掉逐字插空格 —— 原 `src_spaced = " ".join(src)` 把
+    #   《孙子兵法》渲染成「《 孙 子 兵 法 》」。标题（「第 贰 章」）逐字
+    #   加空格是古籍感的设计，书名不是：拆开后无法检索、无法复制、
+    #   读起来像乱码。字距已由下面的 letter-spacing:1px 负责。
     if subtitle:
+        src = (inp.sources or "").strip() or "正史载记与传世文献互校"
         out.append(
-            f'<p style="margin:24px 20px 24px 20px;text-align:center;">'
-            f'<span style="display:inline-block;width:24px;height:1px;background-color:#ccc;"></span></p>'
+            f'<p style="margin:24px auto 24px auto;width:28px;'
+            f'text-align:center;border-top:1px solid #ccc;'
+            f'font-size:1px;line-height:1px;">&nbsp;</p>'
             f'<p style="margin:0 20px 32px 20px;text-align:center;'
             f'font-size:10px;color:#999;letter-spacing:1px;font-weight:400;">'
-            f'本 文 史 料 依 据：基 于 《 旧 唐 书 》 与 回 纥 外 交 档 案 考 略</p>'
+            f'本 文 史 料 依 据：{src}</p>'
         )
 
     # v0.2.7.2: 关闭 WeChat-safe 外层
@@ -1343,7 +1447,7 @@ def render_template_c_v3(inp: ArticleInput) -> str:
     五段式结构：cover → toc → chapter(交替) → quote(每 2 章) → closing
     """
     sb = inp.storyboard
-    title = inp.title or sb.title
+    # 同 render_template_c：不认 inp.title，标题走 _render_cover(sb) 里的 sb.title
     out = ['<section data-template="c-v3">']
 
     # 1. 封面页（用首图）
@@ -1480,7 +1584,7 @@ def render_layout_preview(sb: Storyboard, template: str = "e",
     正确做法是：先用占位图 data URI 渲染出成品版式，再按
     `data-page="N"` 把每个 `<img>` 替换成「占位图 + 分镜说明」。
     """
-    urls = [placeholder_image_uri(f"待生成", h=placeholder_h)
+    urls = [placeholder_image_uri("待生成", h=placeholder_h)
             for _ in sb.pages]
     html = render_publish_article(sb, urls, template=template)
 
@@ -1493,17 +1597,20 @@ def render_layout_preview(sb: Storyboard, template: str = "e",
         p = by_page.get(page_no)
         return _storyboard_note(p) if p else ""
 
-    # a) v0.3.11 新结构：div 图位（含蒙版）
-    # 蒙版内部还有嵌套 div，用 [^<>]* 排除尖括号来锚定 img 标签，
-    # 并允许到 "position:relative" 那个外层 div 结束（末尾连着 </div>）。
+    # a) 图位 div（含蒙版）
+    # v0.3.18：模板 c 的图位外层 div **不再有 position:relative**（微信过滤
+    #   定位，蒙版改用负 margin 压图）。原来靠 `position:relative` 锚定图位的
+    #   正则因此失配 → 分镜说明整段注不进去，layout_preview 只剩 style 壳。
+    #   改为「任意 div + 紧跟 data-page 的 img」定位，并用 `(?:(?!<div).)*?`
+    #   保证内部无嵌套 div 时才收口，避免跨块误吞。
     def _rep_div(m: "re.Match") -> str:
         n = _note_for(int(m.group("page")))
         return m.group(0) + n if n else m.group(0)
 
     html = re.sub(
-        r'<div style="position:relative[^"]*">\s*<img[^>]*\bdata-page="(?P<page>\d+)"[^>]*/>'
-        r'(?:(?!<div style="position:relative).)*?</div>',
-        _rep_div, html)
+        r'<div[^>]*>\s*<img[^>]*\bdata-page="(?P<page>\d+)"[^>]*/>'
+        r'(?:(?!<div).)*?</div>',
+        _rep_div, html, flags=re.S)
 
     # b) 旧结构：p 图位（其他模板仍是这种）
     def _rep_p(m: "re.Match") -> str:
@@ -1526,12 +1633,14 @@ def render_preview_article(sb: Storyboard, image_paths: list[Path], template: st
     page_urls = [file_to_data_uri(p) for p in image_paths]
     return render_article(ArticleInput(
         storyboard=sb, page_image_urls=page_urls,
+        sources=getattr(sb, "sources", "") or None,
     ), template=template)
 
 
 def render_publish_article(sb: Storyboard, wechat_image_urls: list[str], template: str = "e") -> str:
     return render_article(ArticleInput(
         storyboard=sb, page_image_urls=wechat_image_urls,
+        sources=getattr(sb, "sources", "") or None,
     ), template=template)
 
 
@@ -1613,7 +1722,6 @@ def list_templates() -> list[dict]:
 
 def render_mock_preview_v3(storyboard, template: str = "c_v3") -> str:
     """c v3 mock preview（占位图）。"""
-    from .planner import StoryPage
 
     image_urls = [_placeholder_img(f"p{i+1}", h=300) for i in range(len(storyboard.pages))]
     return render_article(ArticleInput(

@@ -108,7 +108,7 @@ def live_checks() -> None:
     from scripts.run import step_plan, step_review_storyboard
 
     print()
-    print(f"=== 3. 真实分镜生成（调 LLM，约 1-3 分钟）===")
+    print("=== 3. 真实分镜生成（调 LLM，约 1-3 分钟）===")
     tmp = Path(tempfile.mkdtemp())
     try:
         sb, job_id, work_dir = step_plan(

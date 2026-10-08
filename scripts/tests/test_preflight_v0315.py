@@ -15,7 +15,6 @@ v0.3.15 修掉的三个误报根因（都来自苏武牧羊真数据）：
 """
 from __future__ import annotations
 
-import copy
 import json
 import sys
 from pathlib import Path
@@ -268,7 +267,7 @@ def test_era_anachronism() -> None:
     sb3 = base_sb()
     sb3["characters"] = [{"name": "文种", "role": "配角",
                           "visual_signature": "面容消瘦，气质坚毅华贵，葛麻官袍"}]
-    check("单��弱信号不报", "ERA_ANACHRONISM" not in codes(run_preflight(sb3)))
+    check("单独弱信号不报", "ERA_ANACHRONISM" not in codes(run_preflight(sb3)))
 
 
 def test_code_level_boosts_injected() -> None:

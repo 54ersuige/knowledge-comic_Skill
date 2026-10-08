@@ -15,7 +15,7 @@ from scripts.core.prompts import recommend_style_rationale, list_styles  # noqa:
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("Usage: python recommend.py "<topic>"")
+        print('Usage: python scripts/recommend.py "<topic>"')
         print()
         print("All available styles:")
         for s in list_styles():
