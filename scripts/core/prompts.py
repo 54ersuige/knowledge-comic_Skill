@@ -3,7 +3,7 @@
 v0.2 重构（2026-09-20）：
   - 砍掉 8 风格中的 4 个（kid_picture_book / kid_science_diagram /
     jp_kawaii_warm / jp_terada），锁定 3 个最有特点的成人向风格：
-      1. new_yorker      纽约客式 · 报刊讽刺（黑白 Risograph 杂志风）
+      1. new_yorker      纽约客式 · 社论插画（Adrian Tomine 风：细墨线 + 柔和平涂）
       2. us_mid_century  美式中世纪 · 复古杂志（mustard+teal+砖红）
       3. cn_xuanfeng     宣风 · 国风写意（飞白+朱砂+宣纸，中国水墨写意）
   - 加 ZERO_TEXT_BOOST：所有 prompt 强制 "NO TEXT/NUMBERS/DIGITS/LETTERS/SIGNS"
@@ -204,8 +204,8 @@ PRINT_STYLE_PREFIX = (
 )
 
 PRINT_STYLE_LOCK = (
-    " CRITICAL STYLE LOCK: flat printed illustration on paper. Drawn ink contours, "
-    "flat colour shapes with hard edges, visible paper grain. "
+    " CRITICAL STYLE LOCK: flat printed illustration. Drawn ink contours, "
+    "flat colour shapes with hard edges. "
     "NO photographic lens blur, NO bokeh, NO shallow depth-of-field, NO realistic skin "
     "texture, NO cinematic lighting falloff, NO 3D shading. "
     "Faces are DRAWN with linework, never photographed. "
@@ -702,26 +702,45 @@ COMMON_NEGATIVE = (
 
 STYLES: dict[str, StylePreset] = {
 
-    # === 1. new_yorker · 纽约客式 · 报刊讽刺 ===
+    # === 1. new_yorker · 纽约客式 · 社论插画 ===
+    # v0.3.29：**方向性重写**。原来写的是「editorial cartoon … like a cartoon by
+    # Tom Bachtell or Liam Walsh」+「Risograph print style」—— 用户实测否掉：
+    # 「我要的是 Adrian Tomine 为纽约客画的插画风格」。Bachtell 是夸张漫画家，
+    # 出的图是"大头漫画"；Tomine 的风格恰恰相反（他自己原话：更细致、更讲究构图、
+    # 全彩、柔和粉彩调平涂、"完全不写实绘画感"）。
+    # 多源一致的特征：均匀细墨线（ligne claire）/ 平涂无纹理 / 低对比柔和调色 /
+    # 写实比例不做夸张脸 / 情绪靠姿态 / 正视角 + 大留白 / Edward Hopper 式城市孤独。
+    # 参考：Tomine 在 Slate「Working」访谈里的自述 + VideCue/Lines&Colors 的风格梳理。
     "new_yorker": StylePreset(
         id="new_yorker",
-        name_zh="纽约客式 · 报刊讽刺",
-        name_en="New Yorker editorial cartoon",
-        category="A · 黑白 Risograph 杂志风",
+        name_zh="纽约客式 · 社论插画",
+        name_en="New Yorker editorial illustration (Tomine)",
+        category="A · 纽约客社论插画（Tomine 风）",
         use_cases=("知识科普", "商业评论", "社会议题", "严肃话题", "成人读者"),
         prompt_en=(
-            "Single-panel editorial cartoon in style of The New Yorker magazine, "
-            "like a cartoon by Tom Bachtell or Liam Walsh. Risograph print style on cream paper. "
-            "Subtle cream paper texture, slight ink bleed on edges, slight Risograph "
-            "misregistration where color blocks don't perfectly align, subtle halftone dot "
-            "pattern in flat color areas, slight grain. Clean hand-drawn ink lines, thin to "
-            "medium weight, slight hand-drawn imperfection, pen on paper feel. "
-            "Flat low-saturation color blocks (limited palette: cream, black, soft grey, "
-            "muted teal accent), no gradients, no airbrush. Editorial composition with "
-            "deliberate negative space, focal subject anchored off-center, "
-            "subtle visual metaphor through objects and spatial relationships."
+            "Literary editorial illustration for The New Yorker magazine, in the "
+            "style of Adrian Tomine. "
+            "Clean unwavering ink contour of EVEN weight (ligne claire) — precise and "
+            "controlled, no sketchy or scratchy strokes, no thick variable-width cartoon "
+            "outline. "
+            "Flat opaque colour fills with NO surface texture: no halftone dots, no print "
+            "misregistration, no paper grain, no airbrush, no gradients, no painterly "
+            "brushwork — the colour is flat, clean and even. "
+            "Muted low-contrast palette leaning pastel: grey-blue, dusty orange, off-white, "
+            "warm grey, dim yellow. No saturated primary colours. "
+            "Figures are drawn NATURALISTICALLY with realistic head-to-body proportions — "
+            "simplified but never exaggerated: NOT caricature, NOT big-head cartoon, NOT "
+            "chibi. Faces stay understated and quiet; emotion is carried by posture, gaze "
+            "and placement far more than by facial expression. "
+            "Formal near-orthographic composition, mostly eye-level — very few dramatic "
+            "angles. Generous negative space where empty areas carry as much weight as the "
+            "figures. "
+            "Quiet observational mood, like an Edward Hopper moment in a modern city: "
+            "architectural precision, winter light, the mild loneliness of public space. "
+            "This is literary illustration — NOT a gag cartoon, NOT caricature, NOT satire "
+            "with exaggerated features."
         ),
-        prompt_zh="纽约客式单格漫画，Risograph 印刷质感，米色纸 + 平面色块 + 细线条。",
+        prompt_zh="纽约客式文学社论插画（Adrian Tomine 风）：均匀细墨线 + 平涂无纹理 + 低饱和柔和调色（灰蓝/灰橙/米白/暖灰），写实比例不做夸张漫画脸，正视角构图 + 大量留白。",
         negative=COMMON_NEGATIVE,
     ),
 

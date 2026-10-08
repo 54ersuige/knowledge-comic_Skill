@@ -10,22 +10,32 @@ v0.2.4（2026-09-21）从早期 8 风格收敛到 **5 风格**，v0.3.26 维持�
 
 ---
 
-## 1. `new_yorker` · 纽约客式 · 报刊讽刺 ⭐ 推荐
+## 1. `new_yorker` · 纽约客式 · 社论插画 ⭐ 推荐
 
 **适合**：商业评论、社会议题、严肃话题、成人读者、知识科普、经济学/心理学
 
-**视觉特征**：米色纸 + Risograph 印刷质感 + 平面色块 + 细线条 + 网点 + 留白编辑构图
+**视觉特征**（**Adrian Tomine 给纽约客画的社论插画方向**）：均匀细墨线（ligne claire）+ 平涂无纹理 + 低对比柔和调色（灰蓝 / 灰橙 / 米白 / 暖灰）+ **写实头身比、不做夸张漫画脸** + 正视角 + 大留白
 
-**Prompt 锚点**（最稳健，验证可用）：
+> **v0.3.29 方向性修正**：原定义写的是「editorial cartoon … like a cartoon by
+> Tom Bachtell or Liam Walsh」+「Risograph print style on cream paper」。
+> 用户看实测出图后明确否掉：「我要的是 **Adrian Tomine** 为纽约客创作的插画风格」。
+> Bachtell 是夸张漫画家（出"大头漫画"），与 Tomine 恰好相反 —— Tomine 本人自述：
+> 「更细致、更讲究构图、永远全彩…偏柔和的**粉彩平涂**…**完全不写实绘画感**」；
+> 另有「平涂、几乎无纹理、低对比柔和调色、写实比例、情绪靠姿态而非表情、
+> 正视角构图」等一致描述（Slate「Working」访谈 + Lines&Colors / Economist 梳理）。
+
+**Prompt 锚点**（当前实现；**唯一真源是 `scripts/core/prompts.py` 的
+`STYLES["new_yorker"]`，下面是节选**）：
 ```
-Single-panel editorial cartoon in style of The New Yorker magazine,
-like a cartoon by Tom Bachtell or Liam Walsh. Risograph print style on cream paper.
-Subtle cream paper texture, slight ink bleed on edges, slight Risograph
-misregistration where color blocks don't perfectly align, subtle halftone dot
-pattern in flat color areas, slight grain. Clean hand-drawn ink lines, thin to
-medium weight, slight hand-drawn imperfection, pen on paper feel.
-Flat low-saturation color blocks (limited palette: cream, black, soft grey,
-muted teal accent), no gradients, no airbrush.
+Literary editorial illustration for The New Yorker magazine, in the style of Adrian Tomine.
+Clean unwavering ink contour of EVEN weight (ligne claire) — no sketchy strokes,
+no thick variable-width cartoon outline.
+Flat opaque colour fills with NO surface texture: no halftone dots, no print
+misregistration, no paper grain, no airbrush, no gradients, no painterly brushwork.
+Muted low-contrast palette leaning pastel: grey-blue, dusty orange, off-white, warm grey.
+Figures drawn NATURALISTICALLY with realistic head-to-body proportions — NOT caricature,
+NOT big-head cartoon. Emotion carried by posture, gaze and placement.
+Formal near-orthographic composition, mostly eye-level. Generous negative space.
 ```
 
 **关键负向**：`NO anime, NO Pixar, NO Disney, NO chibi, NO moe, NO kawaii, NO photorealistic, NO 3D render, NO painterly, NO big anime eyes`

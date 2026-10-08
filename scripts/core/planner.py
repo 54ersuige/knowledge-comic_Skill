@@ -48,6 +48,13 @@ DEFAULT_PAGES = 8
 LLM_TIMEOUT = 180.0
 LLM_MAX_RETRIES = 1
 
+# v0.3.29：解析失败的重试次数（首次 + 1 次重试）。
+# temperature=0.7，模型偶发吐出无法解析的内容（实测 6 次里 1 次）。
+# 抛错是对的（故障必须可见，不能静默降级到 mock），但一次偶发就整轮失败、
+# 要人来重跑，代价不成比例 —— 重试一次远便宜于重跑整条链路。
+# **只针对解析失败重试**，不复用 LLM_MAX_RETRIES（那是客户端层对 API 异常的重试）。
+_LLM_PARSE_ATTEMPTS = 2
+
 # v0.3.24：哪些风格需要挂朝代速查表。
 # 与 prompts.TRADITIONAL_CN_STYLES 同源语义（中国古典三类），但这里单独
 # 声明是为了让 planner 不必 import prompts（避免循环依赖）；两边不一致
@@ -769,47 +776,62 @@ def _call_llm_storyboard(
                 cfg.llm_model, topic[:30], len(bullets), target_pages,
                 len(sys_prompt), "on" if _era_guide_for(style_id) else "off")
 
-    try:
-        resp = client.chat.completions.create(
-            model=cfg.llm_model,
-            messages=[
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": user_msg},
-            ],
-            temperature=0.7,
-        )
-    except Exception as e:
-        raise RuntimeError(f"LLM API call failed: {e}") from e
-
-    content = resp.choices[0].message.content or ""
-    if not content.strip():
-        raise RuntimeError(
-            f"LLM returned empty response. "
-            f"model={cfg.llm_model}, base_url={cfg.llm_base_url}"
-        )
-
-    # --- 提取 JSON ---------------------------------------------------------
+    # --- 调用 + 解析（含一次自动重试）---------------------------------------
     #
-    # v0.3.24 重写。原实现是「数大括号找最外层 {...}」，有两个真实缺陷：
+    # v0.3.24 重写了解析层。原实现是「数大括号找最外层 {...}」，有两个真实缺陷：
     #   1. **大括号计数不认字符串字面量**。visual 字段里只要出现一个不平衡的
     #      { 或 }（英文缩写、代码片段、引文里的大括号），depth 就再也回不到 0，
     #      整段解析失败。
     #   2. 同理，尾部有多余文字时（模型爱在 JSON 后面补一句"以上"）也会连带失败。
-    # 2026-10-08 live 冒烟实测踩中：LLM 明显返回了合法 JSON（finish_reason=stop、
-    # 括号闭合、content 16K 字符），却被判成 "LLM returned non-JSON"，
-    # **静默降级到 mock** —— 表现是 10 页全部没有 keywords、没有 [GENDER]，
-    # 一直到审阅阶段才炸出 30 个 error。temperature=0.7 所以是偶发的。
+    # v0.3.25 拆开了"合法离线模式"与"真故障"：配了 key 但解析失败 = **当场抛错**，
+    # 不再静默降级到 mock（mock 没有 keywords/[GENDER]，会把两条链路悄悄废掉）。
     #
-    # 现在按可靠度从高到低试，每层都记录尝试过什么，失败时报错信息能定位到层。
-    data, tried = _extract_json(content)
+    # v0.3.29 加**一次自动重试**（理由见 _LLM_PARSE_ATTEMPTS 的注释）。
+    # 重试只针对**解析失败**；API 异常直接抛，重试无意义。
+    data = None
+    tried: list[str] = []
+    last_diag = ""
+    for _attempt in range(1, _LLM_PARSE_ATTEMPTS + 1):
+        try:
+            resp = client.chat.completions.create(
+                model=cfg.llm_model,
+                messages=[
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": user_msg},
+                ],
+                temperature=0.7,
+            )
+        except Exception as e:
+            raise RuntimeError(f"LLM API call failed: {e}") from e
+
+        content = resp.choices[0].message.content or ""
+        finish = getattr(resp.choices[0], "finish_reason", "?")
+        if not content.strip():
+            last_diag = (f"empty response | finish_reason={finish} | "
+                         f"model={cfg.llm_model}, base_url={cfg.llm_base_url}")
+        else:
+            # 按可靠度从高到低试，每层都记录尝试过什么，失败时报错信息能定位到层。
+            data, tried = _extract_json(content)
+            if data is not None:
+                if _attempt > 1:
+                    logger.warning("Planner LLM 第 %d 次尝试解析成功（首次失败，已自动重试）",
+                                   _attempt)
+                break
+            last_diag = (
+                f"non-JSON. tried={tried} | len={len(content)} | "
+                f"finish_reason={finish}\n"
+                f"  head(300): {content[:300]!r}\n"
+                f"  tail(300): {content[-300:]!r}"
+            )
+
+        if _attempt < _LLM_PARSE_ATTEMPTS:
+            logger.warning("Planner LLM 返回内容无法解析（第 %d/%d 次），自动重试一次",
+                           _attempt, _LLM_PARSE_ATTEMPTS)
+
     if data is None:
-        tail = content[-300:]
         raise RuntimeError(
-            "LLM returned non-JSON. "
-            f"tried={tried} | len={len(content)} | "
-            f"finish_reason={getattr(resp.choices[0], 'finish_reason', '?')}\n"
-            f"  head(300): {content[:300]!r}\n"
-            f"  tail(300): {tail!r}"
+            f"LLM returned unparseable content after {_LLM_PARSE_ATTEMPTS} attempts. "
+            f"{last_diag}"
         )
     if not isinstance(data, dict):
         raise RuntimeError(f"LLM JSON top level is {type(data).__name__}, expected object")

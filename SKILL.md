@@ -8,7 +8,7 @@ description: |
   「一图读懂」「给这篇文章配图做成漫画」，或给出一个主题 + 要点列表想要成品图文。
   Do NOT use for：单张插画/封面图（直接跑图即可，不需要分镜与排版）；纯文案撰写（用公众号写作类
   skill）；已有图片要排版成文章（用排版类 skill）；科普长文而非漫画（用知识解读类 skill）。
-version: 0.3.28
+version: 0.3.29
 ---
 
 # Knowledge Comic (WeChat MP)
@@ -234,7 +234,7 @@ Mavis 不需要手动干预。
 | `chinese_lianhuanhua_classic` | 中国古典连环画（戴敦邦派）★ **历史典故第一推荐** | 历史典故 / 古典小说 / 圣贤帝王 / 江湖侠义 |
 | `guochao_manhua` | 国潮古风条漫 | 中国故事 / 武侠 / 宏大叙事 |
 | `cn_xuanfeng` | 宣风 · 国风写意 | 国学 / 古籍解读 / 东方美学 |
-| `new_yorker` | 纽约客式 · 报刊讽刺 | 经济学 / 心理学 / 严肃 / 成人 |
+| `new_yorker` | 纽约客式 · 社论插画（Adrian Tomine 风） | 经济学 / 心理学 / 严肃 / 成人 |
 | `us_mid_century` | 美式中世纪 · 复古杂志 | 商业模式 / 品牌 / 设计 |
 
 ### 3 种排版模板

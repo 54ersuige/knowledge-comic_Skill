@@ -6,6 +6,7 @@
 
 ## 快速索引（版本 → 一句话）
 
+- **0.3.29**（2026-10-08）：**new_yorker 风格方向重写 + LLM 解析自动重试**。① 用户看 v0.3.28 的实测出图后否掉：「我要的是 **Adrian Tomine** 为纽约客创作的插画风格」—— 原定义写的是「cartoon … like a cartoon by **Tom Bachtell** or Liam Walsh」+「Risograph print」，而 Bachtell 是**夸张漫画家**（出"大头漫画"），与 Tomine 恰好相反。已按 Tomine 自述（细墨线 ligne claire / 平涂无纹理 / 低对比柔和调色 / **写实比例不做夸张脸** / 正视角大留白）整段重写，风格名从「报刊讽刺」改为「社论插画」，**实测出图 visual_qa 首次零发现**；② planner 解析失败加**一次自动重试**（实测 6 次里 1 次偶发；抛错行为保留，只是不再一次偶发就整轮失败）
 - **0.3.28**（2026-10-08）：**输出质量三修**（真实 LLM + 真实出图实测驱动）。① **【阻塞级】** 裸词 `banner` 让中文历史战争题材 **12/12 页全阻塞**（"叛军的黑红旗帜"被判诱导画字）—— 与 v0.3.26 的 `inscriptions` 同源，第 3 次同类复发，已移出词表；② **`new_yorker` / `us_mid_century` 漂成照片写实**：根因是 `LIANHUANHUA_STYLE_LOCK` **被无条件拼进所有风格**（Risograph 与戴敦邦宣纸工笔互斥打架）+ 非中国风格无前置声明、不剥摄影词与中文速记 → 新增 `PRINT_ILLUSTRATION_STYLES` 三件套，实测 STYLE_DRIFT **90% 阻塞 → 40% 建议**；③ **七要素只落到 4 段**：§4.2 范例题只写了 5 段而 LLM 照抄 → 补齐后 **7/7 段**；正文平均 **89 → 100 字**，`BODY_SHORT` **3 页 → 0 页**
 - **0.3.27**（2026-10-08）：**文档层重构 + 目录卫生**。① `SKILL.md` 1102 → 227 行（体积 -82%，每次触发少烧约 17K tokens）——三块互不相邻的版本史搬进本文件，**原文未改一字**；② 新增 `references/quality-gates.md`，判据**从代码取真值**（22 个 preflight code + 4 个 visual_qa code）而不是抄旧文档；③ `README.md` 整体停在 v0.2.4 且推荐两个已归档脚本 → 删除，安装说明并入 `SKILL.md` 的 `## Setup`；④ `scripts/review.py` 的 `set_page_field` / `dump_storyboard` 上收为 `run.py` 的 `step_set_page_field` / `step_dump_storyboard`（step 函数不该让 Mavis 去调旁路模块）；⑤ 新增 `scripts/check_docs.py` —— 校验文档 ↔ 代码一致性，应对本项目**第 4 次复发的文档漂移**；⑥ 清掉 434MB `data/` + 22MB `_archive/` + 7 个无人引用的外围脚本 + 根目录垃圾（`$null` / `_tmp_*.py` / `_msg2.txt`）；⑦ 修 `guide.py` 死引用、`preflight.py` 同名函数重复定义（347/393 行）、`style_guide.md` 的「总分≥90」死规格、`prompts.py` 把 5 风格写成 3 风格、`check_drift.py` 依赖不存在的 `AGENTS.md`；⑧ **测试夹具从 gitignore 的 `data/` 移进 `scripts/tests/fixtures/`** —— 原先那个测试只在"恰好跑过该 job 的机器"上能过，换设备必红
 - **0.3.26**（2026-10-08）：两个 preflight 判据反转（零文字声明里的枚举被误判成"诱导画字"→ 12/12 页全阻塞；清代皇帝穿龙袍被判时代穿帮）+ 强制交付资产（**没发过的资产 = 没做完**）
@@ -50,6 +51,87 @@
 ---
 
 ## 详细版本记录
+
+## v0.3.29 核心变化（2026-10-08，new_yorker 风格方向重写 + 解析自动重试）
+
+**背景**：v0.3.28 把 `new_yorker` 从"照片"修成了"插画"，但用户看过实测出图后
+**否掉了方向**：
+
+> 「我觉得右边的效果还是不好，并且我要的是纽约客杂志插画风是
+> **Adrian Tomine** 为纽约客创作的插画的风格」
+
+### 1. 风格参照搞错了人：Bachtell ≠ Tomine
+
+原定义写的是：
+
+```
+Single-panel editorial cartoon in style of The New Yorker magazine,
+like a cartoon by Tom Bachtell or Liam Walsh. Risograph print style on cream paper.
+```
+
+**Tom Bachtell 是夸张漫画家**——他的纽约客作品是"大头、夸张特征"的漫画肖像。
+而用户要的 **Adrian Tomine 恰好相反**。Tomine 本人在 Slate「Working」访谈里自述：
+
+> 「那个风格**更细致、更讲究构图、永远是全彩**。我用偏**柔和的粉彩调平涂色**。
+> **完全不写实绘画感**（not painterly at all）。」
+
+多源一致的其他特征（VideCue 风格指南 / Lines&Colors / Economist / Litro）：
+- **均匀细墨线、笔重几乎无变化**（ligne claire），不是粗的卡通描边
+- **平涂、几乎没有纹理**（"clear line work with solid colour and little to no texture"）
+- **低对比、偏灰的柔和调色**：灰蓝 / 灰橙 / 米白 / 暖灰 / 暗黄，不用饱和原色
+- **写实头身比，不做夸张表情**：情绪靠姿态与构图，不靠面部
+- **正视角、近乎正交的构图**，很少戏剧性角度；**大量留白**
+- 题材气质是 Edward Hopper 式的城市孤独，**不是**搞笑漫画
+
+注意 VideCue 的"不该用"清单里明确写着：**"需要夸张漫画或粗俗幽默的内容"** ——
+这就直接否掉了原定义的 cartoon/caricature 路线。
+
+**修法**：整段重写 `STYLES["new_yorker"]` 的 `prompt_en` / `prompt_zh` /
+`name_zh` / `name_en` / `category`：
+
+| | 改前 | 改后 |
+|---|---|---|
+| name_zh | 纽约客式 · 报刊讽刺 | 纽约客式 · 社论插画 |
+| category | A · 黑白 Risograph 杂志风 | A · 纽约客社论插画（Tomine 风） |
+| 线条 | hand-drawn, thin to medium, slight imperfection | **EVEN weight（ligne claire）**，不要粗卡通描边 |
+| 上色 | Risograph 网点 / 套印不准 / 米色纸纹 | **平涂无纹理**：no halftone / no misregistration / no paper grain |
+| 调色 | cream + black + soft grey + muted teal | **柔和粉彩低对比**：grey-blue / dusty orange / off-white / warm grey |
+| 人物 | （未约束比例） | **写实头身比，明令 NOT caricature / NOT big-head** |
+| 气质 | editorial cartoon | literary illustration，NOT gag cartoon |
+
+顺带修掉一处新引入的字面矛盾：`PRINT_STYLE_LOCK` 里原写
+`visible paper grain`，与 Tomine 定义里的 `no paper grain` 打架（v0.3.28 刚因
+同类矛盾吃过亏），已把该短语从共享锁里移除。
+
+**实测**：重出同一页 p1 —— **visual_qa 首次零发现**（此前是 90% 阻塞 → 40% 建议），
+肉眼核对逐条对上 Tomine 特征（细墨线 / 平涂 / 灰蓝+灰橙 / 写实头身比 / 克制表情 /
+正视角留白）。**风格方向由用户终审。**
+
+### 2. 解析失败加一次自动重试
+
+v0.3.28 留档的偶发问题：`temperature=0.7`，planner 偶发返回无法解析的内容
+（实测 6 次运行里 1 次），`plan_storyboard` 当场抛错。
+
+抛错本身**是对的**（v0.3.25 刻意拆掉了静默降级），但"一次偶发 → 整轮失败 →
+要人手动重跑"代价不成比例。新增 `_LLM_PARSE_ATTEMPTS = 2`：**只针对解析失败**
+重试一次；**API 异常不重试**（那是网络/额度问题，重试无意义，直接抛）。
+两次都失败仍抛错，且报错信息点明尝试次数。
+
+### 3. 验证
+
+```
+python scripts/run_tests.py     15/15 通过（含新增 test_v0329.py）
+ruff check scripts/             All checks passed!
+python scripts/check_docs.py    7 份文档无悬空引用
+```
+
+`test_v0329.py` 覆盖：风格定义方向（13 项）+ 重试契约 4 象限
+（坏→好成功 / 坏→坏抛错 / API 异常不重试 / 顺利不多调）。
+打桩同时替掉 `OpenAI` 与 `get_config`，**不依赖本机 `.env`**
+（这正是 v0.3.27 修过的"测试不可复现"）。
+
+另外：按用户要求清理了验证期在 `data/` 留下的 2 个工作目录
+（证据图已先复制到会话工作区并校验哈希一致）。
 
 ## v0.3.28 核心变化（2026-10-08，输出质量三修 —— 全部由实测驱动）
 
